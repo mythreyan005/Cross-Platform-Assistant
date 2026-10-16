@@ -1,0 +1,54 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "OpenDaylight TransportPCE RESTCONF API",
+    "description": "Optical Software-Defined Networking (SDN) and Path Computation Element (PCE) service endpoints.",
+    "version": "1.0"
+  },
+  "paths": {
+    "/api/v1/network": {
+      "get": {
+        "tags": ["Topology", "Network"],
+        "summary": "Retrieves optical fiber network topology and ROADM nodes",
+        "description": "Queries current OpenROADM multi-layer optical network topology, active node transponders, and fiber link connectivity.",
+        "operationId": "getOpticalNetworkTopology",
+        "responses": {
+          "200": {"description": "Network topology graph returned"}
+        }
+      }
+    },
+    "/api/v1/service-path": {
+      "post": {
+        "tags": ["PCE", "Routing"],
+        "summary": "Calculates optical path computation and wavelength cross-connects",
+        "description": "Calculates optical shortest path, optical tributary slot reservations, and ROADM wavelength cross-connects between endpoints.",
+        "operationId": "calculateServicePath",
+        "responses": {
+          "200": {"description": "Service path computation calculated"}
+        }
+      }
+    },
+    "/restconf/config/ietf-network:networks": {
+      "get": {
+        "tags": ["RESTCONF", "Topology"],
+        "summary": "OpenDaylight IETF network topology data store",
+        "description": "RESTCONF endpoint exposing YANG-modeled optical software-defined network state and transponder configurations.",
+        "operationId": "getIetfNetworks",
+        "responses": {
+          "200": {"description": "IETF networks YANG payload"}
+        }
+      }
+    },
+    "/restconf/operations/transportpce-pce:path-computation-request": {
+      "post": {
+        "tags": ["PCE", "Operations"],
+        "summary": "Invokes PCE optical routing algorithm RPC",
+        "description": "Executes Path Computation Element RPC algorithm to determine feasible optical routes based on optical signal-to-noise ratio (OSNR).",
+        "operationId": "requestPathComputationRpc",
+        "responses": {
+          "200": {"description": "Path computation result with hop details"}
+        }
+      }
+    }
+  }
+}

@@ -1,49 +1,154 @@
+"""
+Swagger / OpenAPI Specification Fetcher for Cross-Platform Knowledge Assistant.
+Extracts API endpoints, HTTP methods, operation summaries, tags, and documentation.
+"""
+
+import os
+import json
+import logging
+from typing import List, Optional, Dict, Any
 import requests
 
-def fetch_swagger_docs(swagger_url):
+try:
+    from .models_data import SourceRecord, SourceType
+except ImportError:
+    from models_data import SourceRecord, SourceType
+
+logger = logging.getLogger(__name__)
+
+
+def parse_openapi_spec(spec_data: Dict[str, Any], project_id: str, base_url: str = "") -> List[SourceRecord]:
     """
-    Fetches an OpenAPI/Swagger JSON file and extracts the endpoints and their descriptions.
+    Parses an OpenAPI/Swagger dictionary and outputs unified SourceRecord items.
     """
-    all_endpoints = []
-    
-    try:
-        print(f"Fetching API documentation from: {swagger_url}...")
-        
-        # We need a headers dictionary to mimic a browser, sometimes raw JSON links block Python
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(swagger_url, headers=headers)
-        response.raise_for_status()
-        
-        swagger_data = response.json()
-        paths = swagger_data.get('paths', {})
-        
-        for path, methods in paths.items():
-            for method, details in methods.items():
-                clean_endpoint = {
-                    'endpoint': f"{method.upper()} {path}",
-                    'summary': details.get('summary', 'No summary provided'),
-                    'description': details.get('description', 'No description provided')
-                }
-                all_endpoints.append(clean_endpoint)
-                
-    except Exception as e:
-        print(f"Error fetching Swagger docs: {e}")
-        
-    return all_endpoints
+    records: List[SourceRecord] = []
+    paths = spec_data.get("paths", {})
+    api_title = spec_data.get("info", {}).get("title", "API")
+
+    for path, path_item in paths.items():
+        if not isinstance(path_item, dict):
+            continue
+
+        for method, operation in path_item.items():
+            method_lower = method.lower()
+            if method_lower not in ("get", "post", "put", "delete", "patch", "options", "head"):
+                continue
+
+            if not isinstance(operation, dict):
+                continue
+
+            summary = operation.get("summary", "").strip() or f"{method.upper()} {path}"
+            description = operation.get("description", "").strip()
+            operation_id = operation.get("operationId", "")
+            tags = operation.get("tags", [])
+
+            # Extract parameter names
+            params = []
+            for p in operation.get("parameters", []):
+                if isinstance(p, dict) and p.get("name"):
+                    params.append(f"{p['name']} ({p.get('in', 'query')})")
+
+            # Extract response codes
+            responses = list(operation.get("responses", {}).keys())
+
+            relationships = []
+            for tag in tags:
+                relationships.append({
+                    "target_type": "component",
+                    "target_id": tag,
+                    "relationship": "RELATED_TO"
+                })
+
+            endpoint_id = f"{method.upper()} {path}"
+            content = (
+                f"API Endpoint: {endpoint_id}\n"
+                f"Specification: {api_title}\n"
+                f"Summary: {summary}\n"
+                f"Tags/Components: {', '.join(tags) if tags else 'General'}\n"
+                f"Parameters: {', '.join(params) if params else 'None'}\n"
+                f"Responses: {', '.join(responses) if responses else 'Standard'}\n"
+                f"Description: {description if description else 'No detailed description provided.'}"
+            )
+
+            record = SourceRecord(
+                source_type=SourceType.OPENAPI,
+                source_id=endpoint_id,
+                project_id=project_id,
+                title=f"Endpoint [{method.upper()}]: {path} - {summary}",
+                content=content,
+                url=f"{base_url.rstrip('/')}{path}" if base_url else None,
+                status="active",
+                metadata={
+                    "method": method.upper(),
+                    "path": path,
+                    "summary": summary,
+                    "operation_id": operation_id,
+                    "tags": tags,
+                    "parameters": params,
+                    "responses": responses,
+                },
+                relationships=relationships
+            )
+            records.append(record)
+
+    logger.info(f"Parsed {len(records)} API endpoints for {project_id}.")
+    return records
+
+
+def fetch_openapi_records(
+    source_url_or_path: str,
+    project_id: str = "default",
+    base_url: str = ""
+) -> List[SourceRecord]:
+    """
+    Loads OpenAPI / Swagger from a web URL or local JSON file and returns SourceRecords.
+    """
+    logger.info(f"Loading OpenAPI specification from: {source_url_or_path}...")
+
+    # Case 1: Local file path
+    if os.path.exists(source_url_or_path):
+        try:
+            with open(source_url_or_path, "r", encoding="utf-8") as f:
+                spec_data = json.load(f)
+                return parse_openapi_spec(spec_data, project_id, base_url)
+        except Exception as e:
+            logger.error(f"Failed to read local OpenAPI specification file: {e}")
+            return []
+
+    # Case 2: Remote HTTP URL
+    if source_url_or_path.startswith("http://") or source_url_or_path.startswith("https://"):
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            response = requests.get(source_url_or_path, headers=headers, timeout=12)
+            response.raise_for_status()
+            spec_data = response.json()
+            return parse_openapi_spec(spec_data, project_id, base_url)
+        except Exception as e:
+            logger.warning(f"Failed to fetch remote OpenAPI JSON from {source_url_or_path}: {e}")
+            return []
+
+    logger.warning(f"OpenAPI source neither exists locally nor is a valid URL: {source_url_or_path}")
+    return []
+
+
+def fetch_swagger_docs(swagger_url: str) -> List[Dict[str, Any]]:
+    """
+    Legacy compatibility wrapper returning list of endpoint dicts.
+    """
+    records = fetch_openapi_records(swagger_url)
+    legacy = []
+    for r in records:
+        legacy.append({
+            'endpoint': r.source_id,
+            'summary': r.metadata.get('summary', r.title),
+            'description': r.content
+        })
+    return legacy
+
 
 if __name__ == "__main__":
-    # Note: The Sonatype link your friend sent is a package repository page, not the raw JSON file. 
-    # To parse Swagger, we need the raw JSON. Here is a standard public Swagger JSON as an example:
-    RAW_SWAGGER_URL = "https://petstore.swagger.io/v2/swagger.json"
-    
-    print("Starting Swagger script...")
-    endpoints = fetch_swagger_docs(RAW_SWAGGER_URL)
-    
-    print(f"\nSuccessfully fetched {len(endpoints)} API endpoints!\n")
-    
-    # Just print the first 5 so we don't flood the terminal
-    for ep in endpoints[:5]:
-        print(f"[{ep['endpoint']}]")
-        print(f"Summary: {ep['summary']}")
-        print(f"Description: {ep['description']}\n")
-        print("-" * 40)
+    test_url = "https://petstore.swagger.io/v2/swagger.json"
+    recs = fetch_openapi_records(test_url, project_id="petstore")
+    print(f"Fetched {len(recs)} endpoints from Petstore.")
+    for r in recs[:3]:
+        print(f"- {r.source_id} : {r.title}")

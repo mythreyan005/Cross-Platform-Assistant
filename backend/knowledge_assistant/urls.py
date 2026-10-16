@@ -1,25 +1,24 @@
 """
-URL configuration for knowledge_assistant project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/6.1/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+URL Configuration for knowledge_assistant project.
+Maps chat, status, re-indexing, and authentication endpoints.
 """
+
 from django.contrib import admin
 from django.urls import path
-from knowledge_assistant.views import chat_api
+from knowledge_assistant.views import ChatAPIView, StatusAPIView, ReindexAPIView
+from knowledge_assistant.auth_views import RegisterView, LoginView, LogoutView, UserMeView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    # This is the endpoint our React frontend will call!
-    path('api/chat/', chat_api, name='chat_api'),
+
+    # Core Knowledge Assistant Endpoints
+    path('api/chat/', ChatAPIView.as_view(), name='chat_api'),
+    path('api/status/', StatusAPIView.as_view(), name='status_api'),
+    path('api/reindex/', ReindexAPIView.as_view(), name='reindex_api'),
+
+    # Authentication & Authorization Endpoints
+    path('api/auth/register/', RegisterView.as_view(), name='auth_register'),
+    path('api/auth/login/', LoginView.as_view(), name='auth_login'),
+    path('api/auth/logout/', LogoutView.as_view(), name='auth_logout'),
+    path('api/auth/me/', UserMeView.as_view(), name='auth_me'),
 ]

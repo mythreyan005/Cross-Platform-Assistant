@@ -1,0 +1,116 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "DHIS2 Core Web API",
+    "description": "REST API documentation for DHIS2 Core Platform health data and tracker systems.",
+    "version": "2.41"
+  },
+  "paths": {
+    "/api/dataValueSets": {
+      "get": {
+        "tags": ["Analytics", "DataEntry"],
+        "summary": "Queries and imports aggregate data value sets",
+        "description": "Retrieve and export aggregated health data values matching specific org units, periods, and data set identifiers.",
+        "operationId": "getDataValueSets",
+        "parameters": [
+          {"name": "dataSet", "in": "query", "required": false},
+          {"name": "period", "in": "query", "required": false},
+          {"name": "orgUnit", "in": "query", "required": false}
+        ],
+        "responses": {
+          "200": {"description": "Data value sets retrieved successfully"}
+        }
+      },
+      "post": {
+        "tags": ["DataEntry"],
+        "summary": "Imports bulk data value sets into DHIS2 repository",
+        "description": "Accepts XML or JSON payload of data values for import into the analytics datastore.",
+        "operationId": "saveDataValueSets",
+        "responses": {
+          "200": {"description": "Import summary report returned"}
+        }
+      }
+    },
+    "/api/analytics": {
+      "get": {
+        "tags": ["Analytics"],
+        "summary": "Multi-dimensional analytical query engine",
+        "description": "Executes high-performance analytical queries across indicator dimensions, period hierarchies, and spatial boundaries.",
+        "operationId": "getAnalyticsData",
+        "parameters": [
+          {"name": "dimension", "in": "query", "required": true},
+          {"name": "filter", "in": "query", "required": false}
+        ],
+        "responses": {
+          "200": {"description": "Analytics tabular data retrieved"}
+        }
+      }
+    },
+    "/api/organisationUnits": {
+      "get": {
+        "tags": ["OrganisationUnits", "Hierarchy"],
+        "summary": "Queries administrative organisational unit hierarchy",
+        "description": "Retrieves the organizational tree hierarchy, geographical boundary coordinates, and parent-child administrative relationships.",
+        "operationId": "getOrganisationUnits",
+        "responses": {
+          "200": {"description": "List of organisation units"}
+        }
+      }
+    },
+    "/api/programs": {
+      "get": {
+        "tags": ["Tracker", "Programs"],
+        "summary": "Retrieves clinical health tracker programs and stage rules",
+        "description": "Access configurations of clinical tracker programs, longitudinal stages, validation indicators, and enrollment rule engines.",
+        "operationId": "getPrograms",
+        "responses": {
+          "200": {"description": "Programs configuration returned"}
+        }
+      }
+    },
+    "/api/trackedEntityInstances": {
+      "get": {
+        "tags": ["Tracker"],
+        "summary": "Queries tracked entity patient and case records",
+        "description": "Retrieves individual tracked entity instances, patient demographics, and longitudinal disease surveillance profiles.",
+        "operationId": "getTrackedEntityInstances",
+        "responses": {
+          "200": {"description": "Tracked entities list"}
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "tags": ["Events"],
+        "summary": "Single-event anonymous health interventions without enrollment",
+        "description": "Accesses anonymous point-of-service health interventions and lab survey records.",
+        "operationId": "getEvents",
+        "responses": {
+          "200": {"description": "List of single events"}
+        }
+      }
+    },
+    "/api/dataElements": {
+      "get": {
+        "tags": ["Metadata"],
+        "summary": "Metadata catalog of data elements and domain indicators",
+        "description": "Returns dictionary definitions, data types, category combos, and aggregation operators of all DHIS2 data elements.",
+        "operationId": "getDataElements",
+        "responses": {
+          "200": {"description": "Data element metadata catalog"}
+        }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "tags": ["UserManagement"],
+        "summary": "Returns current authenticated user profile and roles",
+        "description": "Retrieves current user authorities, assigned organisation units, user group memberships, and credentials.",
+        "operationId": "getCurrentUserProfile",
+        "responses": {
+          "200": {"description": "Current user profile"}
+        }
+      }
+    }
+  }
+}

@@ -1,20 +1,36 @@
+"""
+RAG Pipeline Orchestrator for Cross-Platform Knowledge Assistant.
+Coordinates multi-source data ingestion, document preprocessing, ChromaDB vector indexing,
+Knowledge Graph construction, and Hybrid Graph-RAG answer generation.
+"""
+
 import os
+import re
+import logging
 from pathlib import Path
+from typing import Dict, List, Optional, Any, Union
+
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_classic.chains import create_retrieval_chain
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
 
-# Import the fetchers
 try:
-    from .jira_fetcher import fetch_jira_issues
-    from .github_fetcher import fetch_github_commits
+    from .models_data import SourceRecord, SourceType
+    from .github_fetcher import fetch_github_records
+    from .jira_fetcher import fetch_jira_records
+    from .swagger_fetcher import fetch_openapi_records
+    from .document_processor import DocumentProcessor
+    from .knowledge_graph import SoftwareKnowledgeGraph
+    from .hybrid_rag import HybridGraphRAG
 except ImportError:
-    from jira_fetcher import fetch_jira_issues
-    from github_fetcher import fetch_github_commits
+    from models_data import SourceRecord, SourceType
+    from github_fetcher import fetch_github_records
+    from jira_fetcher import fetch_jira_records
+    from swagger_fetcher import fetch_openapi_records
+    from document_processor import DocumentProcessor
+    from knowledge_graph import SoftwareKnowledgeGraph
+    from hybrid_rag import HybridGraphRAG
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -24,199 +40,287 @@ try:
 except ImportError:
     pass
 
+logger = logging.getLogger(__name__)
+
 # Free local HuggingFace embeddings
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+doc_processor = DocumentProcessor(chunk_size=700, chunk_overlap=120)
 
-PROJECT_CONFIGS = {
+PROJECT_CONFIGS: Dict[str, Dict[str, Any]] = {
     "dhis2/dhis2-core": {
         "name": "DHIS2 Core Platform",
-        "jira_url": "https://dhis2.atlassian.net",
+        "slug": "dhis2",
+        "jira_url": os.getenv("JIRA_BASE_URL", "https://dhis2.atlassian.net"),
         "jira_project": "DHIS2",
         "github_repo": "dhis2/dhis2-core",
         "chroma_dir": str(BASE_DIR / "chroma_db_dhis2"),
-        "swagger_endpoints": [
-            "API Endpoint: GET /api/dataValueSets. Description: Queries and imports data value sets for aggregated and tracker health data.",
-            "API Endpoint: GET /api/analytics. Description: Analytical reporting engine across dimensions (data elements, indicators, periods, organisation units).",
-            "API Endpoint: GET /api/organisationUnits. Description: Manages administrative organizational hierarchy, parent-child relationships, and geo-location coordinates.",
-            "API Endpoint: GET /api/programs. Description: Configures clinical health tracker programs, event stages, program rules, and program indicators.",
-            "API Endpoint: GET /api/trackedEntityInstances. Description: Handles tracked entity records for individuals, patients, and disease surveillance.",
-            "API Endpoint: GET /api/events. Description: Records and queries single-event health interventions without repeated tracker enrollments.",
-            "API Endpoint: GET /api/dataElements. Description: Metadata repository of health indicators, categories, and raw data element definitions.",
-            "API Endpoint: GET /api/me. Description: Returns the profile, authorities, user groups, and credentials of the authenticated user."
-        ]
+        "graph_file": str(BASE_DIR / "knowledge_graph_dhis2.json"),
+        "openapi_source": str(BASE_DIR / "specs" / "dhis2_openapi.json"),
     },
     "opendaylight/transportpce": {
         "name": "TransportPCE (OpenDaylight)",
+        "slug": "transportpce",
         "jira_url": "https://lf-opendaylight.atlassian.net",
         "jira_project": "TRNSPRTPCE",
         "github_repo": "opendaylight/transportpce",
         "chroma_dir": str(BASE_DIR / "chroma_db_transportpce"),
-        "swagger_endpoints": [
-            "API Endpoint: GET /api/v1/network. Description: Retrieves current optical fiber network topology, ROADM node configurations, and optical link connectivity.",
-            "API Endpoint: POST /api/v1/service-path. Description: Calculates path computation element (PCE) optical wavelength routes, cross-connects, and port mappings.",
-            "API Endpoint: GET /restconf/config/ietf-network:networks. Description: OpenDaylight RESTCONF endpoint for optical software-defined networking topology models.",
-            "API Endpoint: POST /restconf/operations/transportpce-pce:path-computation-request. Description: Invokes PCE path calculation algorithm for optical transport services."
-        ]
+        "graph_file": str(BASE_DIR / "knowledge_graph_transportpce.json"),
+        "openapi_source": str(BASE_DIR / "specs" / "transportpce_openapi.json"),
     }
 }
 
-def normalize_repo(repo, question=""):
+
+def normalize_repo(repo: Optional[str], question: str = "") -> str:
     """
-    Intelligently determines the target project.
-    If the question specifically refers to a project by name, prioritizes that project.
-    Otherwise, defaults to the user's selected repository.
+    Determines the target project repository key.
+    Prioritizes explicit keywords in the question if provided.
     """
     q = (question or "").lower()
     has_dhis = "dhis" in q
-    has_transport = "transport" in q or "opendaylight" in q
+    has_transport = "transport" in q or "opendaylight" in q or "pce" in q
 
-    # Question specifically requests a project
     if has_dhis and not has_transport:
         return "dhis2/dhis2-core"
     elif has_transport and not has_dhis:
         return "opendaylight/transportpce"
 
-    # Default to selected repo
     if not repo:
         return "dhis2/dhis2-core"
+
     r = repo.lower().strip()
     if "transport" in r or "opendaylight" in r:
         return "opendaylight/transportpce"
     return "dhis2/dhis2-core"
 
-def load_and_index_data(repo="dhis2/dhis2-core"):
+
+def get_knowledge_graph(repo_key: str) -> SoftwareKnowledgeGraph:
+    """Loads or initializes the Knowledge Graph for a specific project."""
+    config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
+    kg = SoftwareKnowledgeGraph(project_id=repo_key)
+    graph_file = config["graph_file"]
+    if os.path.exists(graph_file):
+        kg.load_from_file(graph_file)
+    else:
+        kg.ensure_project_node(config["name"])
+    return kg
+
+
+def get_vector_store(repo_key: str) -> Chroma:
+    """Initializes the ChromaDB vector store instance for a project."""
+    config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
+    chroma_dir = config["chroma_dir"]
+    os.makedirs(chroma_dir, exist_ok=True)
+    return Chroma(persist_directory=chroma_dir, embedding_function=embeddings)
+
+
+def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, max_issues: int = 20) -> Dict[str, Any]:
     """
-    Pulls data from Jira, GitHub, and Swagger for the specified repository and saves into ChromaDB.
+    Ingests data across GitHub, Jira, and OpenAPI for the target repository,
+    populates both ChromaDB and SoftwareKnowledgeGraph with deduplication,
+    and saves the updated knowledge graph to disk.
     """
     repo_key = normalize_repo(repo)
-    config = PROJECT_CONFIGS[repo_key]
-    chroma_dir = config["chroma_dir"]
+    config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
 
     print(f"\n==================================================")
     print(f"Indexing data for project: {config['name']} ({repo_key})")
-    print(f"Target vector store: {chroma_dir}")
+    print(f"Target ChromaDB: {config['chroma_dir']}")
+    print(f"Target Knowledge Graph: {config['graph_file']}")
     print(f"==================================================")
 
-    db = Chroma(persist_directory=chroma_dir, embedding_function=embeddings)
-    documents = []
+    vector_store = get_vector_store(repo_key)
+    kg = get_knowledge_graph(repo_key)
+    kg.ensure_project_node(config["name"])
 
-    # 1. Fetch Jira Issues
+    all_records: List[SourceRecord] = []
+
+    # 1. Ingest Jira Issues
     print(f"Fetching Jira Issues for {config['name']} ({config['jira_project']})...")
-    try:
-        jira_issues = fetch_jira_issues(config["jira_url"], config["jira_project"], max_results=10)
-        for issue in jira_issues:
-            content = (
-                f"Project: {config['name']}\n"
-                f"Jira Ticket {issue['key']}: {issue['summary']}\n"
-                f"Status: {issue['status']}\n"
-                f"Description: {issue['description']}"
-            )
-            documents.append(Document(
-                page_content=content,
-                metadata={"source": "jira", "id": issue['key'], "repo": repo_key, "project": config['name']}
-            ))
-        print(f"Fetched and parsed {len(jira_issues)} Jira issues.")
-    except Exception as e:
-        print(f"Warning: Skipping Jira due to error: {e}")
+    jira_records = fetch_jira_records(
+        base_url=config["jira_url"],
+        project_key=config["jira_project"],
+        max_results=max_issues
+    )
+    for jrec in jira_records:
+        kg.add_issue_record(jrec)
+        all_records.append(jrec)
+    print(f"Retrieved {len(jira_records)} Jira issue records.")
 
-    # 2. Fetch GitHub Commits
+    # 2. Ingest GitHub Commits
     print(f"Fetching GitHub Commits for {config['github_repo']}...")
-    try:
-        commits = fetch_github_commits(config["github_repo"], max_commits=15)
-        for commit in commits:
-            jira_links = ", ".join(commit['linked_jira_keys']) if commit['linked_jira_keys'] else "None"
-            content = (
-                f"Project: {config['name']} ({config['github_repo']})\n"
-                f"GitHub Commit {commit['sha']} by {commit['author']}\n"
-                f"Message: {commit['message']}\n"
-                f"Linked Jira Tickets: {jira_links}"
-            )
-            documents.append(Document(
-                page_content=content,
-                metadata={"source": "github", "id": commit['sha'], "repo": repo_key, "project": config['name']}
-            ))
-        print(f"Fetched {len(commits)} GitHub commits.")
-    except Exception as e:
-        print(f"Warning: Skipping GitHub due to error: {e}")
+    github_records = fetch_github_records(
+        repo_name=config["github_repo"],
+        max_commits=max_commits
+    )
+    for grec in github_records:
+        kg.add_commit_record(grec)
+        all_records.append(grec)
+    print(f"Retrieved {len(github_records)} GitHub commit records.")
 
-    # 3. Read Swagger / API Documentation
-    print(f"Adding API Documentation specifications for {config['name']}...")
-    for endpoint in config["swagger_endpoints"]:
-        content = f"Project: {config['name']} ({repo_key})\n{endpoint}"
-        documents.append(Document(
-            page_content=content,
-            metadata={"source": "swagger", "repo": repo_key, "project": config['name']}
-        ))
+    # 3. Ingest OpenAPI / Swagger Specifications
+    print(f"Parsing OpenAPI specifications from {config['openapi_source']}...")
+    openapi_records = fetch_openapi_records(
+        source_url_or_path=config["openapi_source"],
+        project_id=repo_key
+    )
+    for orec in openapi_records:
+        kg.add_endpoint_record(orec)
+        all_records.append(orec)
+    print(f"Retrieved {len(openapi_records)} OpenAPI endpoint records.")
 
-    print(f"Adding total of {len(documents)} documents to ChromaDB at {chroma_dir}...")
-    db.add_documents(documents)
-    print(f"Successfully saved {config['name']} data to ChromaDB!\n")
+    # Process chunks for Vector Store
+    chunked_pairs = doc_processor.process_records(all_records)
+    print(f"Split {len(all_records)} source records into {len(chunked_pairs)} vector chunks.")
 
-def ask_ai(question, groq_api_key, repo="dhis2/dhis2-core"):
+    if chunked_pairs:
+        chunk_ids = [cid for cid, _ in chunked_pairs]
+        docs = [d for _, d in chunked_pairs]
+
+        # Use add_texts or add_documents with explicit deterministic IDs
+        try:
+            vector_store.add_documents(documents=docs, ids=chunk_ids)
+            print(f"Successfully indexed {len(docs)} chunks into ChromaDB.")
+        except Exception as e:
+            print(f"Error adding documents to ChromaDB: {e}")
+
+    # Persist Knowledge Graph
+    kg.save_to_file(config["graph_file"])
+    stats = kg.get_stats()
+    print(f"Saved Knowledge Graph with {stats['total_nodes']} nodes and {stats['total_edges']} edges.\n")
+
+    return {
+        "project": config["name"],
+        "repo": repo_key,
+        "jira_issues": len(jira_records),
+        "github_commits": len(github_records),
+        "openapi_endpoints": len(openapi_records),
+        "vector_chunks": len(chunked_pairs),
+        "graph_stats": stats
+    }
+
+
+def ask_ai_hybrid(
+    question: str,
+    groq_api_key: Optional[str] = None,
+    repo: str = "dhis2/dhis2-core",
+    top_k: int = 5,
+    graph_depth: int = 2
+) -> Dict[str, Any]:
     """
-    Takes a user question, searches project-specific ChromaDB, and asks Groq LLM for the answer.
+    Executes Hybrid Graph-RAG retrieval and answers the question.
+    Returns structured dictionary with answer, sources, retrieval_mode, and graph_entities.
     """
+    key = groq_api_key or os.getenv("GROQ_API_KEY", "")
+    if not key:
+        raise ValueError("GROQ_API_KEY must be provided or configured in .env")
+
     repo_key = normalize_repo(repo, question)
-    config = PROJECT_CONFIGS[repo_key]
-    chroma_dir = config["chroma_dir"]
+    config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
 
-    # Ensure database exists and is populated
-    if not os.path.exists(chroma_dir) or not os.listdir(chroma_dir):
-        print(f"ChromaDB for {config['name']} is empty or not found. Populating now...")
+    # Ensure vector store and knowledge graph are populated
+    chroma_dir = config["chroma_dir"]
+    graph_file = config["graph_file"]
+
+    if not os.path.exists(chroma_dir) or not os.path.exists(graph_file):
+        print(f"Data store missing for {config['name']}. Triggering initial indexing...")
         load_and_index_data(repo_key)
 
-    db = Chroma(persist_directory=chroma_dir, embedding_function=embeddings)
-    retriever = db.as_retriever(search_kwargs={"k": 5})
+    vector_store = get_vector_store(repo_key)
+    kg = get_knowledge_graph(repo_key)
 
-    llm = ChatGroq(
-        temperature=0,
-        model_name="qwen/qwen3.8-27b",
-        groq_api_key=groq_api_key
+    hybrid_rag = HybridGraphRAG(
+        project_id=repo_key,
+        vector_store=vector_store,
+        knowledge_graph=kg,
+        groq_api_key=key,
+        top_k=top_k,
+        graph_depth=graph_depth
     )
 
-    system_prompt = (
-        f"You are a Software Engineering Knowledge Assistant specialized in {config['name']} ({repo_key}). "
-        f"Answer the user's question clearly, thoroughly, and informatively using the provided context, which contains "
-        f"GitHub commits, Jira issues, and API documentation for {config['name']}. "
-        "Summarize relevant bug fixes, code changes, features, or architecture endpoints clearly. "
-        "If the context provides relevant details, extract and explain them nicely with commit hashes, Jira keys, or endpoints. "
-        "Do not answer with a simple refusal unless there is genuinely no relevant information in the context."
-        "\n\nContext:\n{context}"
-    )
+    return hybrid_rag.answer_question(question)
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("human", "{input}"),
-    ])
 
-    question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+def ask_ai(
+    question: str,
+    groq_api_key: Optional[str] = None,
+    repo: str = "dhis2/dhis2-core",
+    return_structured: bool = False
+) -> Union[str, Dict[str, Any]]:
+    """
+    Backwards-compatible interface.
+    Returns string answer if return_structured=False, or structured dict if return_structured=True.
+    """
+    result = ask_ai_hybrid(question, groq_api_key, repo=repo)
+    if return_structured:
+        return result
+    return result.get("answer", "")
 
-    print(f"Querying [{config['name']}] with question: '{question}'...")
-    response = rag_chain.invoke({"input": question})
-    return response["answer"]
+
+def get_project_sync_status(repo: str = "dhis2/dhis2-core") -> Dict[str, Any]:
+    """
+    Inspects actual local ChromaDB and Knowledge Graph stores to report real synchronization state.
+    """
+    repo_key = normalize_repo(repo)
+    config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
+
+    chroma_dir = config["chroma_dir"]
+    graph_file = config["graph_file"]
+
+    vector_count = 0
+    if os.path.exists(chroma_dir):
+        try:
+            vs = get_vector_store(repo_key)
+            vector_count = vs._collection.count()
+        except Exception:
+            pass
+
+    graph_stats = {
+        "total_nodes": 0,
+        "total_edges": 0,
+        "nodes_by_type": {},
+        "edges_by_relationship": {}
+    }
+    if os.path.exists(graph_file):
+        try:
+            kg = get_knowledge_graph(repo_key)
+            graph_stats = kg.get_stats()
+        except Exception:
+            pass
+
+    is_synced = vector_count > 0 and graph_stats["total_nodes"] > 0
+
+    return {
+        "repo": repo_key,
+        "name": config["name"],
+        "is_synced": is_synced,
+        "vector_chunks_count": vector_count,
+        "graph_nodes_count": graph_stats["total_nodes"],
+        "graph_edges_count": graph_stats["total_edges"],
+        "nodes_breakdown": graph_stats["nodes_by_type"],
+        "edges_breakdown": graph_stats["edges_by_relationship"]
+    }
+
 
 if __name__ == "__main__":
-    print("=== Indexing and Testing Both Projects ===")
-    GROQ_KEY = os.getenv("GROQ_API_KEY")
-    if not GROQ_KEY:
-        print("Warning: GROQ_API_KEY is not set in environment or .env file.")
+    print("=== Testing Hybrid Graph-RAG Pipeline ===")
+    test_key = os.getenv("GROQ_API_KEY")
+    if not test_key:
+        print("Notice: Set GROQ_API_KEY to test LLM generation.")
 
-    # Index both projects so both databases are fully populated
+    # Reindex DHIS2 and TransportPCE
     print("\n1. Indexing DHIS2...")
-    load_and_index_data("dhis2/dhis2-core")
+    load_and_index_data("dhis2/dhis2-core", max_commits=10, max_issues=10)
 
     print("\n2. Indexing TransportPCE...")
-    load_and_index_data("opendaylight/transportpce")
+    load_and_index_data("opendaylight/transportpce", max_commits=10, max_issues=10)
 
-    # Test TransportPCE query
-    q1 = "Explain recent bug fixes and improvements in TransportPCE."
-    ans1 = ask_ai(q1, GROQ_KEY, repo="opendaylight/transportpce")
-    print("\n[AI Answer - TransportPCE]:")
-    print(ans1)
-
-    # Test DHIS2 query
-    q2 = "Explain recent bug fixes and improvements in DHIS2."
-    ans2 = ask_ai(q2, GROQ_KEY, repo="dhis2/dhis2-core")
-    print("\n[AI Answer - DHIS2]:")
-    print(ans2)
+    if test_key:
+        print("\n3. Testing Hybrid Query...")
+        res = ask_ai_hybrid(
+            "What bug fixes or commits are related to DHIS2 issues and what API endpoints are available?",
+            groq_api_key=test_key,
+            repo="dhis2/dhis2-core"
+        )
+        print("\nRetrieval Mode:", res.get("retrieval_mode"))
+        print("Verified Sources Count:", len(res.get("sources", [])))
+        print("\nAnswer:\n", res.get("answer"))

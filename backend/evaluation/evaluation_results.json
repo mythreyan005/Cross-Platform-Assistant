@@ -1,0 +1,158 @@
+{
+  "total_queries_evaluated": 4,
+  "avg_latency_vector_only_sec": 42.013,
+  "avg_latency_hybrid_rag_sec": 13.433,
+  "hybrid_retrieval_success_rate": "100%",
+  "evaluation_dataset": [
+    {
+      "id": "Q1",
+      "question": "Which GitHub commits are linked to Jira tickets in TransportPCE?",
+      "repo": "opendaylight/transportpce",
+      "vector_only": {
+        "latency_sec": 59.617,
+        "docs_count": 5,
+        "entities_found": {
+          "jira_keys": [
+            "TRNSPRTPCE-1003",
+            "TRNSPRTPCE-990"
+          ],
+          "commit_shas": [
+            "bfd2c47",
+            "e3284e6"
+          ],
+          "endpoints": []
+        }
+      },
+      "hybrid_graph_rag": {
+        "latency_sec": 2.325,
+        "docs_count": 2,
+        "graph_entities_count": 18,
+        "entities_found": {
+          "jira_keys": [
+            "TRNSPRTPCE-1000",
+            "TRNSPRTPCE-1003",
+            "TRNSPRTPCE-979"
+          ],
+          "commit_shas": [
+            "2e7e995",
+            "41d02f0",
+            "490a8fb",
+            "de74a89",
+            "e10ac2a",
+            "e3284e6"
+          ],
+          "endpoints": []
+        },
+        "retrieval_mode": "hybrid_graph_rag"
+      }
+    },
+    {
+      "id": "Q2",
+      "question": "What API endpoints in DHIS2 handle analytical queries and data value sets?",
+      "repo": "dhis2/dhis2-core",
+      "vector_only": {
+        "latency_sec": 26.827,
+        "docs_count": 5,
+        "entities_found": {
+          "jira_keys": [],
+          "commit_shas": [],
+          "endpoints": [
+            "GET /api/analytics`**",
+            "GET /api/dataValueSets`**"
+          ]
+        }
+      },
+      "hybrid_graph_rag": {
+        "latency_sec": 3.686,
+        "docs_count": 3,
+        "graph_entities_count": 25,
+        "entities_found": {
+          "jira_keys": [],
+          "commit_shas": [],
+          "endpoints": [
+            "GET /api/analytics",
+            "GET /api/analytics`**",
+            "GET /api/dataValueSets",
+            "GET /api/dataValueSets`**",
+            "POST /api/dataValueSets",
+            "POST /api/dataValueSets`**",
+            "POST /api/dataValueSets`."
+          ]
+        },
+        "retrieval_mode": "hybrid_graph_rag"
+      }
+    },
+    {
+      "id": "Q3",
+      "question": "What bug fixes or code changes were made in TransportPCE for path computation?",
+      "repo": "opendaylight/transportpce",
+      "vector_only": {
+        "latency_sec": 36.553,
+        "docs_count": 5,
+        "entities_found": {
+          "jira_keys": [],
+          "commit_shas": [
+            "3028e61",
+            "f1fd920"
+          ],
+          "endpoints": [
+            "/TAPI"
+          ]
+        }
+      },
+      "hybrid_graph_rag": {
+        "latency_sec": 40.348,
+        "docs_count": 1,
+        "graph_entities_count": 0,
+        "entities_found": {
+          "jira_keys": [
+            "TRNSPRTPCE-944"
+          ],
+          "commit_shas": [
+            "3028e61",
+            "f1fd920"
+          ],
+          "endpoints": [
+            "/TAPI",
+            "POST /api/v1/service-path`:",
+            "POST /restconf/operations/transportpce-pce:path-computation-request`:"
+          ]
+        },
+        "retrieval_mode": "vector_only"
+      }
+    },
+    {
+      "id": "Q4",
+      "question": "What user profile information is accessible via DHIS2 API endpoints?",
+      "repo": "dhis2/dhis2-core",
+      "vector_only": {
+        "latency_sec": 45.056,
+        "docs_count": 5,
+        "entities_found": {
+          "jira_keys": [],
+          "commit_shas": [],
+          "endpoints": [
+            "GET /api/me`"
+          ]
+        }
+      },
+      "hybrid_graph_rag": {
+        "latency_sec": 7.372,
+        "docs_count": 3,
+        "graph_entities_count": 25,
+        "entities_found": {
+          "jira_keys": [],
+          "commit_shas": [],
+          "endpoints": [
+            "/case",
+            "GET /api/me`",
+            "GET /api/me`**",
+            "GET /api/programs`**",
+            "GET /api/trackedEntityInstances`**"
+          ]
+        },
+        "retrieval_mode": "hybrid_graph_rag"
+      }
+    }
+  ]
+}

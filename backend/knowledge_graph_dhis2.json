@@ -1,0 +1,1739 @@
+{
+  "project_id": "dhis2/dhis2-core",
+  "nodes": [
+    {
+      "id": "project:dhis2/dhis2-core",
+      "node_type": "project",
+      "label": "DHIS2 Core Platform",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22296",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22296",
+      "key": "DHIS2-22296",
+      "summary": "Org unit merge silently deletes the target's own data values when the target already has data",
+      "status": "In Review",
+      "priority": "Highest",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22296: Org unit merge silently deletes the target's own data values when the target already has data\nType: Bug | Status: In Review | Priority: Highest\nComponents: [API] Other\nDescription: Prerequisite : a user with  F_ORGANISATION_UNIT_MERGE  authority.\n Pick any org unit that has data that will serve as a target. For example, Ngelehun CHC ( DiszpKrYNg8 ). Note down the count of data values:  GET /api/dataValueSets?dataSet=BfMAe6Itzgt&period=202401&orgUnit=DiszpKrYNg8 Now under the same parent (Badija in our example) create a new org unit that will serve as a source. Merge the source into the target with the default strategy in Metadata Management (Organisation units \u2192 merge, leave \"Move data values to the target organisation unit\" selected) or via the API:\n \n```POST /api/organisationUnits/merge\n{\"sources\": [\"g8upMTyEZGZ\"], \"target\": \"DiszpKrYNg8\", \"deleteSources\": true}``` Repeat the request from step 2 for the target. \nActual\n \nThe target has 0 data values for Child Health, January 2024: its own 44 values are gone. In general, the target is left with only the values that came from the sources. In this case, since the source was newly created and has no data, Ngelehun CHC loses all of its data.\n \nExpected\n \nThe target still has its 44 values (the source had none to add). In general, the target keeps its own data values and gains the source's values. Where both have a value for the same data element, period, category option combo, and attribute option combo, the most recently updated value wins (as the strategy name and UI say).",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22296",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] other",
+      "node_type": "component",
+      "label": "Component [API] Other",
+      "name": "[API] Other",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22301",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22301",
+      "key": "DHIS2-22301",
+      "summary": "Tracker import 500: NPE in program rule engine when a TE's stored attribute value resolves to null",
+      "status": "Planned",
+      "priority": "High",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22301: Tracker import 500: NPE in program rule engine when a TE's stored attribute value resolves to null\nType: Bug | Status: Planned | Priority: High\nComponents: [API] Tracker\nDescription: Explanation\n \nA synchronous tracker import fails with an uncaught NPE (HTTP 500) whenever the program rule engine evaluates a tracked entity that has a stored attribute value resolving to  null . Since 2.43.1 this state is created by a perfectly valid import: confidential attribute values are written to the plain  value  column only, leaving  encryptedvalue  NULL \u2014 which is also a plaintext-at-rest security regression.\n \nSteps to reproduce\n \nVerified on 2.43 (rev  8de3dc0 ), Sierra Leone demo,  encryption.password  configured:\n Have a program whose program rules reference a TEI attribute (e.g.  d2:hasValue(#{attr}) ). Have a tracked entity attribute with  confidential=true . POST /api/tracker?async=false  a TE + enrollment in that program including a value for the confidential attribute \u2192 200 OK. POST /api/tracker?async=false  any follow-up for that TE that triggers rule evaluation (e.g. an event for the enrollment, or the enrollment again without the attribute). \nActual result\n \nStep 4 fails with HTTP 500:\n \n```java.lang.NullPointerException: Parameter specified as non-null is null: method org.hisp.dhis.rules.models.RuleAttributeValue.<init>, parameter value\n  at org.hisp.dhis.rules.models.RuleAttributeValue.<init>(RuleAttributeValue.kt)\n  at ...DefaultProgramRuleService.lambda$getAttributes$25(DefaultProgramRuleService.java:441)\n  at ...DefaultProgramRuleService.buildEnrollmentsWithEvents(DefaultProgramRuleService.java:367)```\n \nAdditionally, after step 3 the confidential value is stored  unencrypted  in the  value  column ( encryptedvalue  is NULL), and the export API returns the plaintext.\n \nExpected result\n \nThe import succeeds; the rule engine treats a null/unreadable stored attribute value as absent. Confidential values are stored encrypted.\n \nSecondary information\n \nRoot cause (two layers)\n \n1. Unguarded null (the 500).   DefaultProgramRuleService.getAttributes  (2.43, line 441) maps the TE's DB-stored attribute values into  RuleAttributeValue  (Kotlin, non-null  value ) without the null filter the payload side has ( filterNullAttributes ):\n \n```trackedEntity.getTrackedEntityAttributeValues().stream()\n    .filter(av -> !payloadAttributeUids.contains(av.getAttribute().getUid()))\n    .map(av -> new RuleAttributeValue(av.getAttribute().getUid(), av.getValue())); // NPE```\n \ngetValue()  =  confidential ? encryptedValue : plainValue , so it is null whenever the column backing the attribute's  current  confidential flag is empty.\n \n2. How the null state arises.\n \nValid import on 2.43.1+ (main cause, verified):  the Hibernate\u2192JDBC importer migration (DHIS2-21378, first in 2.43.1) introduced  TeavWriter , whose INSERT/UPDATE only touch the plain  value  column \u2014  encryptedvalue  is never written. Its comment assumes master's removal of confidential attributes (DHIS2-21518), which is master-only; on 2.43 the entity/hbm still route confidential reads to  encryptedvalue . Every confidential value imported since 2.43.1 is stored plaintext with  encryptedvalue  NULL \u2192 next rule-evaluating import for that TE 500s. Updating a pre-2.43.1 encrypted row also leaves a stale  encryptedvalue  behind, so entity reads silently return the old value. Confidential flag toggled  after values were stored (either direction) \u2014 pre-existing footgun, all versions; the value sits in the opposite column.\n \nNot causes: missing/short  encryption.password  (import rejected with E1112 before persisting); rotated password (jasypt throws at load, doesn't return null); null payload values (treated as deletion and filtered).\n \nSuggested fix\n Null-filter the DB-side stream in  getAttributes  (mirror  filterNullAttributes ) so a null value is \"no value\" instead of a 500. On 2.43: make  TeavWriter  encrypt confidential values into  encryptedvalue  (or backport the DHIS2-21518 removal). The null-filter alone leaves encryption silently broken. Data repair for rows written since 2.43.1: move plaintext  value  \u2192 encrypted  encryptedvalue  for confidential attributes. \nmaster is unaffected by the storage regression (no  encryptedvalue /confidential routing); the missing null-guard asymmetry predates the 2.43 JDBC migration.\n \nNotes\n \nObserved in production logs (2026-10-14) on CREATE_AND_UPDATE sync imports. Distinct from the separately-reported  UniqueAttributesSupplier  preheat NPE (caught, WARN-only, no 500). Full repro record: payloads, SQL evidence and both stack variants ( buildEnrollmentsWithEvents:354  payload branch /  :367  saved-enrollment branch) are archived in the task record for this issue.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22301",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] tracker",
+      "node_type": "component",
+      "label": "Component [API] Tracker",
+      "name": "[API] Tracker",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-19473",
+      "node_type": "issue",
+      "label": "Issue DHIS2-19473",
+      "key": "DHIS2-19473",
+      "summary": "Duplicated Analytics values when using Continuous Analytics job",
+      "status": "Done",
+      "priority": "Highest",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-19473: Duplicated Analytics values when using Continuous Analytics job\nType: Bug | Status: Done | Priority: Highest\nComponents: [API] Analytics\nDescription: Steps to Reproduce\n \nUsing the Sierra DB with DHIS2 2.43.1\n Go to Scheduler \u2192 New job \n```Name: Continuous Analytics\nJob type: Continuous Analytics table\nDelay: 300\nFull update hour of day: 1\nLast years: 100\nSkip table types: Completeness, Completeness target\nSkip outliers: true```\n Wait for Continuous Analytics job to finish its first run Go to Data Entry app,\n Select Org Unit \u201cAllen Town Health Post\u201d (Western Area > FreeTown) Dataset: \u201cPopulation\u201d Period: 2024 Set \u201cExpected pregnancies\u201d value to 500 Wait for Continuous Analytics job to finish Create a new visualization \n```Type: Pivot table\nPeriod: Last 10 years\nColumns: Expected pregnancies\nOU (1): Western Area > Freetown > Allen Town Health Post```\n Check that the value for 2024 is 500 as expected Wait for the \u201cFull update\u201d analytics to run\n Can wait until 1 next day For testing purposes, I triggered the full analytics by updating the DB with the following query, and then going to Data administration app \u2192 Maintenance \u2192 Clear application cache \n```update\n\tpublic.systemsetting\nset\n    value = '2025-03-19T05:00:00.000'\nwhere\n\tname = 'keyNextAnalyticsTableUpdate'```\n Check again the value in the visualization\n note: I had some caching issues sometimes - removing and adding periods to the visualization helped refresh the values correctly \nActual Result\n \nThe value for \u201cExpected pregnancies\u201d in 2024 for the OU \u201cAllen Town Health Post\u201d is 1000 (doubled).\n \nThe same value is duplicated in the database in the  analytics_2024  and  analytics_0  tables.\n \nI\u2019m attaching a sql script to check for the duplicated values.\n \nExpected Result\n \nThe value for \u201cExpected pregnancies\u201d in 2024 for the OU \u201cAllen Town Health Post\u201d is 500.\n \nThe value should be in the  analytics_2024 table only, since a Full update ran and is no longer needed in the latest partition table ( _0  table)\n \nThis reproduction case is with the DATA_VALUE (dataset) entity, but the same happens with other entities, such as Events.\n \nI came up with a workaround for this issue, cleaning up the latest partition tables after a Full update is run. You can check it here:  .\n \nRelated:\n \nHope it helps! Please let me know if you need further information.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-19473",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] analytics",
+      "node_type": "component",
+      "label": "Component [API] Analytics",
+      "name": "[API] Analytics",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-15084",
+      "node_type": "issue",
+      "label": "Issue DHIS2-15084",
+      "key": "DHIS2-15084",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-21748",
+      "node_type": "issue",
+      "label": "Issue DHIS2-21748",
+      "key": "DHIS2-21748",
+      "summary": "Creating a Predictor from a Program Indicator does not populate with the PI disaggregation",
+      "status": "In Review",
+      "priority": "High",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-21748: Creating a Predictor from a Program Indicator does not populate with the PI disaggregation\nType: Bug | Status: In Review | Priority: High\nComponents: [API] Predictors\nDescription: AI-assisted setup and steps to reproduce on SL DB:\n Download the three files into one folder: \ndhis2-21748-metadata-1-structure.json  : categories/combos, output data element, target data set, and the Child Programme category mappings\n \ndhis2-21748-metadata-2-indicators.json  : the disaggregated program indicator + predictor\n \nsetup-dhis2-21748.sh   the runner script that will do the import\n Run the script , pointing it at the instance, for example:\n \nBASE_URL=https://play.im.dhis2.org/stable-2-43-0-1 AUTH=admin:district ./setup-dhis2-21748.sh --run\n \nThis imports the 1st file, generates the category option combos, imports 2nd file, then (because of --run) runs analytics, runs the predictor for 2025\u20132026, and prints the resulting data values.  (Manual alternative to step 2: import file 1 with Create-and-update + Merge \u2192 Data Administration \u2192 Category option combos \u2192 Update \u2192 import file 2 \u2192 then do steps 3\u20134 by hand.) Confirm the PI is disaggregated:  Open  [21748] Children born (disaggregated PI)  in Maintenance (2.42) / Metadata Management (2.43+). Verify it has a Disaggregation section: category combo  [21748] Feeding , attribute combo  [21748] Sex , two category mappings. Run analytics  (Data Administration \u2192 Analytics, or  POST /api/resourceTables/analytics ) and wait for it to finish. Run the predictor   POST /api/predictors/CNRXzQw0Ctv/run?startDate=2025-01-01&endDate=2026-12-31 . Inspect the written values:\n \n```GET /api/dataValueSets.json?dataElement=XpNRHtk87Nz&orgUnit=ImspTQPwCqd&children=true&startDate=2025-01-01&endDate=2026-12-31```\n \nExpected:  the predicted values land on the target data set's attribute combo \u2014 the  [21748] Sex   Male / Female  AOC (or the predictor lets you pick one).\n \nActual:  every value is written with  attributeOptionCombo = HllvX50cXC0  (the  default  combo). On each instance all 10,121 predictions used the default AOC \u2014 none used Male/Female. That's DHIS2-21748. \nOriginal report:\n \nSteps to Reproduce\n \nI am unable to replicate this in  play environments  because there are no PIs set up with PI disaggregations but I have confirmed this in my NACOSA instance shared with\n Create a Data Element to populate from a PI which has PI disaggregations (Target ART initiation Target - export attached. COC = Default Add DE to a Dataset where AOC in the dataset is Age and Gender. Set up Predictor  for input I am using PI GtZzSJTdKGJ - export attached. It is disaggregated by COC - Occupation and AOC - Age and Gender. I do not know how to export the disaggregations for you as well but you can contact me with details if needed. Predictor: Use PI in 3 above as the input DE and DE in 1 above as the output DE. Since there is no COC you do not get asked to define an AOC. Nowhere to define an AOC but the behaviour for DE > DE predictor is that the AOC in the dataset is used to populate the predictor. \nActual Result\n \nWhen running the predictor the values are inserted into DE but with AOC = Default\n \nExpected Result\n \nThe predictor populates DE with the same AOC as is in the PI disaggregation and in the dataset or allows the person to specify which AOC to use.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-21748",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] predictors",
+      "node_type": "component",
+      "label": "Component [API] Predictors",
+      "name": "[API] Predictors",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-20446",
+      "node_type": "issue",
+      "label": "Issue DHIS2-20446",
+      "key": "DHIS2-20446",
+      "summary": "Data Entry App - Organization Unit Search Does Not Auto-Expand Hierarchy",
+      "status": "In Review",
+      "priority": "Highest",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-20446: Data Entry App - Organization Unit Search Does Not Auto-Expand Hierarchy\nType: Bug | Status: In Review | Priority: Highest\nComponents: [App] Data entry\nDescription: Summary\n \nOrganization unit search box filters results but does not automatically expand the hierarchy tree to show matching results. Users must manually expand all parent levels to reach the searched organization unit, defeating the purpose of the search functionality.\n \nDescription\n \nIssue Overview\n \nThe organization unit selector in the Data Entry app has a search box that allows users to type and filter organization units. However, when a user searches for a specific organization unit, the matching results are not automatically revealed in the tree. Instead, users must manually click through each hierarchical level (continent \u2192 country \u2192 region \u2192 district, etc.) to navigate to the organization unit they searched for.\n \nThis creates a poor user experience because:\n The search functionality appears to work (it filters results) But the filtered results remain hidden behind collapsed tree nodes Users still need to know the full hierarchical path to find their org unit The search doesn't save any time or effort compared to manual navigation \nCurrent Behavior\n User clicks on \"Organisation unit\" dropdown showing \"Choose a organisation unit\" User types organization unit name in the search box (e.g., \"Buma\") Search box accepts the input and appears to filter Problem:  The organization unit tree structure remains collapsed User must manually expand:\n \nSierra Leone (country level) Bo (region/district level) Bumpe Ngao (chiefdom level) Finally see \"Buma MCHP\" (facility level) Even though the user already typed \"Buma\" in the search box \nExpected Behavior\n \nWhen a user types in the organization unit search box:\n Search should filter/match organization units based on the search term All parent nodes in the hierarchy should automatically expand  to reveal matching results Matching organization units should be visible immediately without manual expansion Optionally: matching results should be highlighted or brought to the top of the visible list User should be able to click on the matched organization unit directly from search results \nSteps to Reproduce\n \nTest Environment\n \nInstance:  DHIS 2 Demo - Sierra Leone - Data Entry Dataset:  Child Health Organization Unit Hierarchy Example:\n \nSierra Leone \u2192 Bo \u2192 Bumpe Ngao \u2192 Buma MCHP\n \nReproduction Steps\n Navigate to Data Entry application Select \"Child Health\" as the data set Click on \"Organisation unit\" dropdown (shows \"Choose a organisation unit\") In the search box at the top, type \"Buma\" Observe:  The search box accepts the input Observe:  The tree structure still shows only \"Sierra Leone\" as a collapsed node User must manually expand the hierarchy:\n \nClick to expand \"Sierra Leone\" Click to expand \"Bo\" Click to expand \"Bumpe Ngao\" Finally see \"Buma MCHP\" \nExpected:  After typing \"Buma\" in step 4, the entire path (Sierra Leone \u2192 Bo \u2192 Bumpe Ngao \u2192 Buma MCHP) should automatically expand and show \"Buma MCHP\" as a selectable option.\n \nActual:  Search accepts input but does nothing to reveal the matching organization unit. Manual expansion of all parent levels is still required.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-20446",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[app] data entry",
+      "node_type": "component",
+      "label": "Component [App] Data entry",
+      "name": "[App] Data entry",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:LIBS-349",
+      "node_type": "issue",
+      "label": "Issue LIBS-349",
+      "key": "LIBS-349",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-21397",
+      "node_type": "issue",
+      "label": "Issue DHIS2-21397",
+      "key": "DHIS2-21397",
+      "project_id": "dhis2/dhis2-core",
+      "summary": "Search Returns No Results for Users With Limited OU Access",
+      "status": "In Review",
+      "priority": "Highest",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-21397: Search Returns No Results for Users With Limited OU Access\nType: Bug | Status: In Review | Priority: Highest\nComponents: [App] Data entry\nDescription: Steps to Reproduce\n \nUser:   englishB / !English123B  (restricted to a specific branch of the hierarchy - Bombali) Behaviour:\n \nTyping any organisation unit name  below the top-level assigned node  returns  no results . The search appears to ignore children of the assigned root OU, even though the user has legitimate access to them via the hierarchy.\n \n\n \nExpected Result\n \nSearch should return all organisation units within the user\u2019s assigned subtree. The search should respect user scoping and still surface valid descendants.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-21397"
+    },
+    {
+      "id": "commit:801e071",
+      "node_type": "commit",
+      "label": "Commit 801e071",
+      "sha": "801e071cb1f0488b1e5e3bc93c82e3332f3b8f78",
+      "short_sha": "801e071",
+      "author": "Jason Pickering",
+      "title": "Commit 801e071: perf: use patharray containment for descendant org unit resolution in dataValueSets export (#25261) (#25659)",
+      "message": "GitHub Commit 801e071 by Jason Pickering (2026-10-16T09:30:38+00:00)\nRepository: dhis2/dhis2-core\nMessage: perf: use patharray containment for descendant org unit resolution in dataValueSets export (#25261) (#25659)\n\n* perf: use patharray containment for descendant org unit resolution in dataValueSets export\n\nThe ou_with_descendants_ids CTE in HibernateDataExportStore.createExportQuery\nresolved descendant org units via `ou.path LIKE root.path || '%'`. Because the\nprefix is computed per-row from a joined column rather than a plan-time\nconstant, Postgres can never use an index for this predicate (not even the\nexisting varchar_pattern_ops btree on path) and falls back to a full\nsequential scan of organisationunit on every call.\n\nSince the org unit path-array migration (DHIS2-22095) added `patharray` plus\na GIN index (organisationunit_patharray_gin), and the DB's own\nou_moved_patharray descendant-update trigger already uses the same\ncontainment idiom, switch this query to `ou.patharray @> root.patharray`.\n\nLive-validated via EXPLAIN ANALYZE against production data (dataValueSets\nexport with children=true): 260.6ms -> 18.1ms (14.4x), same 643-row result,\nseq scan replaced by a Bitmap Index Scan on organisationunit_patharray_gin.\n\n\ud83e\udd16 AI Assisted\n\n* fix: update stale expected SQL in DataExportQueryBuilderTest\n\nThe two testFilter_*WithChildren tests still asserted the old\n`ou.path LIKE root.path || '%'` join, which no longer matches\nthe patharray-based descendant containment query.\n\n\ud83e\udd16 AI Assisted\n\n* perf: Match descendant org units on the root UID only\n\nCheck `ou.patharray && ARRAY[root.uid]` instead of\n`ou.patharray @> root.patharray`. Both are correct, but the latter makes\nthe GIN scan read the posting list of every ancestor in the root's path,\nincluding the national root, which every org unit contains. For 10\nlevel-4 roots in a 285k-unit hierarchy this takes 4.8ms down to 1.1ms\n(961 to 361 buffer hits).\n\n\ud83e\udd16 AI Assisted\n\n---------\n\n\n(cherry picked from commit 14d432efce124a5f2ccf8ac88ae088ba5758e679)\n\nCo-authored-by: Jan Bernitt <jaanbernitt@gmail.com>\nLinked Jira Issues: DHIS2-22095\nModified Files: dhis-2/dhis-services/dhis-service-core/src/main/java/org/hisp/dhis/datavalue/hibernate/HibernateDataExportStore.java, dhis-2/dhis-services/dhis-service-core/src/test/java/org/hisp/dhis/datavalue/hibernate/DataExportQueryBuilderTest.java",
+      "timestamp": "2026-10-16T09:30:38+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/801e071cb1f0488b1e5e3bc93c82e3332f3b8f78",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22095",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22095",
+      "key": "DHIS2-22095",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "component:dhis-2",
+      "node_type": "component",
+      "label": "Component dhis-2",
+      "name": "dhis-2",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:e05976b",
+      "node_type": "commit",
+      "label": "Commit e05976b",
+      "sha": "e05976b2d5f720805bf641811c8288d8c2f9f238",
+      "short_sha": "e05976b",
+      "author": "Jason Pickering",
+      "title": "Commit e05976b: perf: Stop eager-loading each org unit's children collection [DHIS2-22138] (#25733)",
+      "message": "GitHub Commit e05976b by Jason Pickering (2026-10-16T09:29:58+00:00)\nRepository: dhis2/dhis2-core\nMessage: perf: Stop eager-loading each org unit's children collection [DHIS2-22138] (#25733)\n\n* perf: Do not join fetch children in getOrganisationUnitWithChildren [DHIS2-22138]\n\ngetOrganisationUnitWithChildren already returns every descendant, but it\nalso set fetchChildren, which adds `left join fetch o.children` and, with\nit, a DISTINCT over every org unit column. For a 34,494 org unit subtree\nthis returned 68,670 rows and took 640 ms (1.3 s cold, 24 MB sort spilled\nto disk) instead of 95 ms. No caller reads the children collections; it\nstays lazy and L2 cached for any that do.\n\n\ud83e\udd16 AI Assisted\n\n* docs: Note that getOrganisationUnitWithChildren leaves children uninitialized [DHIS2-22138]\n\n\ud83e\udd16 AI Assisted\n\n* docs: Say descendants in getOrganisationUnitWithChildren Javadoc [DHIS2-22138]\n\nThe methods return the unit and its whole subtree, not only its direct\nchildren. Rename the new test to say what is still returned.\n\n\ud83e\udd16 AI Assisted\nLinked Jira Issues: DHIS2-22138\nModified Files: dhis-2/dhis-api/src/main/java/org/hisp/dhis/organisationunit/OrganisationUnitService.java, dhis-2/dhis-services/dhis-service-core/src/main/java/org/hisp/dhis/organisationunit/DefaultOrganisationUnitService.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/organisationunit/OrganisationUnitServiceTest.java",
+      "timestamp": "2026-10-16T09:29:58+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/e05976b2d5f720805bf641811c8288d8c2f9f238",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22138",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22138",
+      "key": "DHIS2-22138",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "commit:fd40e8f",
+      "node_type": "commit",
+      "label": "Commit fd40e8f",
+      "sha": "fd40e8f881e831466666877dd18c7f998d55e9eb",
+      "short_sha": "fd40e8f",
+      "author": "Jason Pickering",
+      "title": "Commit fd40e8f: fix: Generate category option combo names from untranslated option names [DHIS2-22281] (#25645)",
+      "message": "GitHub Commit fd40e8f by Jason Pickering (2026-10-16T09:29:26+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: Generate category option combo names from untranslated option names [DHIS2-22281] (#25645)\n\nCategoryOptionCombo.getName() built a missing name from each option's\ndisplay name, which is translated into the current user's database\nlocale. Generated names are persisted (on insert, and by\nupdateNameIfNotEqual on regeneration), so the stored name followed the\nlocale of whoever last created, updated or regenerated the category\ncombo. Use the option names instead.\n\nExisting COCs stored with translated names are renamed back on the\nnext regeneration.\n\n\ud83e\udd16 AI Assisted\nLinked Jira Issues: DHIS2-22281\nModified Files: dhis-2/dhis-api/src/main/java/org/hisp/dhis/category/CategoryOptionCombo.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/category/CategoryComboServiceTest.java",
+      "timestamp": "2026-10-16T09:29:26+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/fd40e8f881e831466666877dd18c7f998d55e9eb",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22281",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22281",
+      "key": "DHIS2-22281",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "commit:18a09bf",
+      "node_type": "commit",
+      "label": "Commit 18a09bf",
+      "sha": "18a09bf7321abb2583cad777db37920d0e4d3951",
+      "short_sha": "18a09bf",
+      "author": "Jason Pickering",
+      "title": "Commit 18a09bf: fix: Keep the winning approval's last updated fields in an org unit merge [DHIS2-22296] (#25763)",
+      "message": "GitHub Commit 18a09bf by Jason Pickering (2026-10-16T09:29:03+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: Keep the winning approval's last updated fields in an org unit merge [DHIS2-22296] (#25763)\n\nThe LAST_UPDATED approval merge copied accepted, created and creator but\nnot lastupdated and lastupdatedby. A source approval that replaced a\ntarget approval kept the target's values for both, so the approval\nstatus reported the wrong acceptedBy and acceptedAt. An approval moved\nto the target without a conflict got null for both.\n\nCopy both columns from the winning row in the insert and in the upsert.\n\n\ud83e\udd16 AI Assisted\nLinked Jira Issues: DHIS2-22296\nModified Files: dhis-2/dhis-services/dhis-service-administration/src/main/java/org/hisp/dhis/merge/orgunit/handler/DataOrgUnitMergeHandler.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/merge/orgunit/handler/DataOrgUnitMergeHandlerTest.java",
+      "timestamp": "2026-10-16T09:29:03+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/18a09bf7321abb2583cad777db37920d0e4d3951",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:08b1546",
+      "node_type": "commit",
+      "label": "Commit 08b1546",
+      "sha": "08b1546c73a943d72a51745a41e9d715242f2cf9",
+      "short_sha": "08b1546",
+      "author": "dependabot[bot]",
+      "title": "Commit 08b1546: chore(deps): bump me.fabriciorby:maven-surefire-junit5-tree-reporter (#25753)",
+      "message": "GitHub Commit 08b1546 by dependabot[bot] (2026-10-16T08:16:03+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump me.fabriciorby:maven-surefire-junit5-tree-reporter (#25753)\n\nBumps [me.fabriciorby:maven-surefire-junit5-tree-reporter](https://github.com/fabriciorby/maven-surefire-junit5-tree-reporter) from 1.5.1 to 2.0.0.\n- [Release notes](https://github.com/fabriciorby/maven-surefire-junit5-tree-reporter/releases)\n- [Commits](https://github.com/fabriciorby/maven-surefire-junit5-tree-reporter/compare/v1.5.1...v2.0.0)\n\n---\nupdated-dependencies:\n- dependency-name: me.fabriciorby:maven-surefire-junit5-tree-reporter\n  dependency-version: 2.0.0\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/dhis-test-e2e/pom.xml",
+      "timestamp": "2026-10-16T08:16:03+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/08b1546c73a943d72a51745a41e9d715242f2cf9",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/dataValueSets",
+      "node_type": "endpoint",
+      "label": "GET /api/dataValueSets",
+      "method": "GET",
+      "path": "/api/dataValueSets",
+      "summary": "Queries and imports aggregate data value sets",
+      "tags": [
+        "Analytics",
+        "DataEntry"
+      ],
+      "description": "API Endpoint: GET /api/dataValueSets\nSpecification: DHIS2 Core Web API\nSummary: Queries and imports aggregate data value sets\nTags/Components: Analytics, DataEntry\nParameters: dataSet (query), period (query), orgUnit (query)\nResponses: 200\nDescription: Retrieve and export aggregated health data values matching specific org units, periods, and data set identifiers.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:analytics",
+      "node_type": "component",
+      "label": "Component Analytics",
+      "name": "Analytics",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:dataentry",
+      "node_type": "component",
+      "label": "Component DataEntry",
+      "name": "DataEntry",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:POST:/api/dataValueSets",
+      "node_type": "endpoint",
+      "label": "POST /api/dataValueSets",
+      "method": "POST",
+      "path": "/api/dataValueSets",
+      "summary": "Imports bulk data value sets into DHIS2 repository",
+      "tags": [
+        "DataEntry"
+      ],
+      "description": "API Endpoint: POST /api/dataValueSets\nSpecification: DHIS2 Core Web API\nSummary: Imports bulk data value sets into DHIS2 repository\nTags/Components: DataEntry\nParameters: None\nResponses: 200\nDescription: Accepts XML or JSON payload of data values for import into the analytics datastore.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/analytics",
+      "node_type": "endpoint",
+      "label": "GET /api/analytics",
+      "method": "GET",
+      "path": "/api/analytics",
+      "summary": "Multi-dimensional analytical query engine",
+      "tags": [
+        "Analytics"
+      ],
+      "description": "API Endpoint: GET /api/analytics\nSpecification: DHIS2 Core Web API\nSummary: Multi-dimensional analytical query engine\nTags/Components: Analytics\nParameters: dimension (query), filter (query)\nResponses: 200\nDescription: Executes high-performance analytical queries across indicator dimensions, period hierarchies, and spatial boundaries.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/organisationUnits",
+      "node_type": "endpoint",
+      "label": "GET /api/organisationUnits",
+      "method": "GET",
+      "path": "/api/organisationUnits",
+      "summary": "Queries administrative organisational unit hierarchy",
+      "tags": [
+        "OrganisationUnits",
+        "Hierarchy"
+      ],
+      "description": "API Endpoint: GET /api/organisationUnits\nSpecification: DHIS2 Core Web API\nSummary: Queries administrative organisational unit hierarchy\nTags/Components: OrganisationUnits, Hierarchy\nParameters: None\nResponses: 200\nDescription: Retrieves the organizational tree hierarchy, geographical boundary coordinates, and parent-child administrative relationships.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:organisationunits",
+      "node_type": "component",
+      "label": "Component OrganisationUnits",
+      "name": "OrganisationUnits",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:hierarchy",
+      "node_type": "component",
+      "label": "Component Hierarchy",
+      "name": "Hierarchy",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/programs",
+      "node_type": "endpoint",
+      "label": "GET /api/programs",
+      "method": "GET",
+      "path": "/api/programs",
+      "summary": "Retrieves clinical health tracker programs and stage rules",
+      "tags": [
+        "Tracker",
+        "Programs"
+      ],
+      "description": "API Endpoint: GET /api/programs\nSpecification: DHIS2 Core Web API\nSummary: Retrieves clinical health tracker programs and stage rules\nTags/Components: Tracker, Programs\nParameters: None\nResponses: 200\nDescription: Access configurations of clinical tracker programs, longitudinal stages, validation indicators, and enrollment rule engines.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:tracker",
+      "node_type": "component",
+      "label": "Component Tracker",
+      "name": "Tracker",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:programs",
+      "node_type": "component",
+      "label": "Component Programs",
+      "name": "Programs",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/trackedEntityInstances",
+      "node_type": "endpoint",
+      "label": "GET /api/trackedEntityInstances",
+      "method": "GET",
+      "path": "/api/trackedEntityInstances",
+      "summary": "Queries tracked entity patient and case records",
+      "tags": [
+        "Tracker"
+      ],
+      "description": "API Endpoint: GET /api/trackedEntityInstances\nSpecification: DHIS2 Core Web API\nSummary: Queries tracked entity patient and case records\nTags/Components: Tracker\nParameters: None\nResponses: 200\nDescription: Retrieves individual tracked entity instances, patient demographics, and longitudinal disease surveillance profiles.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/events",
+      "node_type": "endpoint",
+      "label": "GET /api/events",
+      "method": "GET",
+      "path": "/api/events",
+      "summary": "Single-event anonymous health interventions without enrollment",
+      "tags": [
+        "Events"
+      ],
+      "description": "API Endpoint: GET /api/events\nSpecification: DHIS2 Core Web API\nSummary: Single-event anonymous health interventions without enrollment\nTags/Components: Events\nParameters: None\nResponses: 200\nDescription: Accesses anonymous point-of-service health interventions and lab survey records.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:events",
+      "node_type": "component",
+      "label": "Component Events",
+      "name": "Events",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/dataElements",
+      "node_type": "endpoint",
+      "label": "GET /api/dataElements",
+      "method": "GET",
+      "path": "/api/dataElements",
+      "summary": "Metadata catalog of data elements and domain indicators",
+      "tags": [
+        "Metadata"
+      ],
+      "description": "API Endpoint: GET /api/dataElements\nSpecification: DHIS2 Core Web API\nSummary: Metadata catalog of data elements and domain indicators\nTags/Components: Metadata\nParameters: None\nResponses: 200\nDescription: Returns dictionary definitions, data types, category combos, and aggregation operators of all DHIS2 data elements.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:metadata",
+      "node_type": "component",
+      "label": "Component Metadata",
+      "name": "Metadata",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "endpoint:GET:/api/me",
+      "node_type": "endpoint",
+      "label": "GET /api/me",
+      "method": "GET",
+      "path": "/api/me",
+      "summary": "Returns current authenticated user profile and roles",
+      "tags": [
+        "UserManagement"
+      ],
+      "description": "API Endpoint: GET /api/me\nSpecification: DHIS2 Core Web API\nSummary: Returns current authenticated user profile and roles\nTags/Components: UserManagement\nParameters: None\nResponses: 200\nDescription: Retrieves current user authorities, assigned organisation units, user group memberships, and credentials.",
+      "url": null,
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:usermanagement",
+      "node_type": "component",
+      "label": "Component UserManagement",
+      "name": "UserManagement",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-21396",
+      "node_type": "issue",
+      "label": "Issue DHIS2-21396",
+      "key": "DHIS2-21396",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-19520",
+      "node_type": "issue",
+      "label": "Issue DHIS2-19520",
+      "key": "DHIS2-19520",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22299",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22299",
+      "key": "DHIS2-22299",
+      "summary": "[EventVisualization] Add programStage to value",
+      "status": "In Progress",
+      "priority": "No Priority",
+      "issue_type": "Feature",
+      "description": "Jira Issue DHIS2-22299: [EventVisualization] Add programStage to value\nType: Feature | Status: In Progress | Priority: No Priority\nComponents: [API] Analytics\nDescription: In  /analytics/events/aggregate , the  value  parameter accepts a stage prefixed data element, e.g.  value=A03MvHHogjR.a3kGcGDCuk6 . When the same value is saved in an EventVisualization, the stage is lost.\n \nCurrent behaviour\n \nvalue  on EventVisualization is not persisted. It is backed by  dataElementValueDimension  or  attributeValueDimension , which only hold the data element or attribute. There is no stage on the value, so a saved value can't tell which stage it belongs to. The visualization-level  programStage  is not enough. In a tracker program the layout can contain dimensions from several stages, and the same data element can be in more than one of them.\n \nExample\n \nTracker program with a data element that is in two stages:\n \nThe app sends  value: { id: <stageId>.<dataElementId> } , which is the same form the analytics API takes. After save and reload,  value  only carries the data element, so the app can't rebuild the  value=<stageId>.<dataElementId>  request.\n \nExpected\n \nvalue  should carry its stage, the same way  columns / rows / filters  do:\n \n```\"value\": {\n    \"id\": \"qrur9Dvnyt5\",\n    \"programStage\": {\n        \"id\": \"Zj7UnCAulEk\"\n    }\n}```\n \nPersist the stage of the value data element on save. Return  value.programStage  on GET. Tracked entity attributes have no stage, so no  programStage  is saved.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22299",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22300",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22300",
+      "key": "DHIS2-22300",
+      "summary": "Validation rule analysis worker threads block each other on the expression parse-tree cache",
+      "status": "Open",
+      "priority": "No Priority",
+      "issue_type": "Task",
+      "description": "Jira Issue DHIS2-22300: Validation rule analysis worker threads block each other on the expression parse-tree cache\nType: Task | Status: Open | Priority: No Priority\nComponents: [API] Other\nDescription: Description\n \nWhen validation rule analysis runs, its worker threads spend a large share of their time blocked or waiting on each other instead of evaluating rules. This shows up in thread dumps and profilers as most validation worker threads parked in the expression parser's cache ( org.hisp.dhis.antlr.cache.LocalCache.get ), and in long total blocked time per analysis. On a production instance (2.43, 20 rules, ~9.8M data values, 16 workers) one 41 s analysis showed 63 s of total blocked time, with 47% of worker samples in this cache.\n \nThe results of the analysis are correct; the problem is only that the work is serialised.\n \nSteps to reproduce\n Use an instance with a reasonably large data set, e.g. the Sierra Leone demo database or a copy of a production database, on a server with several CPU cores. Pick a validation rule group with several rules and a top-level org unit with many descendants. Run validation rule analysis through the API, ideally two at the same time:\n \n```POST /api/dataAnalysis/validationRules\nContent-Type: application/json\n\n{\"ou\": \"<root org unit UID>\", \"startDate\": \"2025-01-01\", \"endDate\": \"2025-12-31\",\n \"vrg\": \"<validation rule group UID>\", \"notification\": false, \"persist\": false}```\n \n(or Data Quality app > Validation Rule Analysis with the same options). While the analysis is running, take a thread dump of the DHIS2 JVM a few times, e.g.  jcmd <pid> Thread.print , or watch it in a profiler (Glowroot, JFR, IntelliJ). \nActual\n \nMost validation worker threads ( DataValidationRunner  tasks) are  BLOCKED  or  WAITING  inside org.hisp.dhis.antlr.cache.LocalCache.get  / cache2k  put  / expiry-timer code, waiting on one shared lock.\n \nMeasured on a copy of a 2.43 production database, 2 concurrent analyses, 16 workers:\n \n45% of worker thread samples  BLOCKED , 51% inside  LocalCache.get . Production profile of a single 41 s analysis: 63 s total blocked time, 47% of worker samples in  LocalCache.get , 28% parked on the cache lock.\n \nExpected\n \nWorker threads only touch the shared cache lock when an expression is parsed for the first time; repeated evaluation of an already-parsed expression does not block other workers. Blocked time during validation analysis is close to zero, and analyses run faster when the server has idle CPU.\n \nWith the fix, on the same database and workload: 0% of worker samples blocked, 1% in  LocalCache.get , identical results (same violations), and 2 concurrent analyses about 7% faster per round on 12 cores (8.63 s -> 8.03 s).",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22300",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22201",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22201",
+      "key": "DHIS2-22201",
+      "summary": "Discrepancies between DHIS2 and WHO z-score calculations",
+      "status": "Done",
+      "priority": "Highest",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22201: Discrepancies between DHIS2 and WHO z-score calculations\nType: Bug | Status: Done | Priority: Highest\nComponents: [API] Program rules\nDescription: Steps to Reproduce\n On a play instance, create a Tracker program with data elements for height (cm), weight (kg) and sex. Add a program rule that assigns  d2:zScoreWFH(height, weight, sex)  to a data element. Enroll a female child with  height 95.0 cm, weight 11.6 kg . Enroll a female child with  height 95.0 cm, weight 10.7 kg . Enroll a female child with  height 112.37 cm, weight 15.3 kg . Compare the results with the WHO reference calculation (WHO igrowup LMS parameters, or a validated package such as  zanthro  or  anthro ). \n\n \nBug created from this CoP post    Additional Claude generated details attached.\n \nActual Result\n \nActual Result\n Case DHIS2 WHZ Classification F, 95.0 cm, 11.6 kg \u22121.90 Not malnourished F, 95.0 cm, 10.7 kg \u22122.88 MAM F, 112.37 cm, 15.3 kg \u22121.64 Not malnourished \nExpected Result\n \nExpected Result\n Case WHO WHZ Classification F, 95.0 cm, 11.6 kg \u22122.08 MAM F, 95.0 cm, 10.7 kg \u22123.06 SAM F, 112.37 cm, 15.3 kg \u22122.70 MAM",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22201",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] program rules",
+      "node_type": "component",
+      "label": "Component [API] Program rules",
+      "name": "[API] Program rules",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22046",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22046",
+      "key": "DHIS2-22046",
+      "summary": "[METADATA MANAGEMENT APP]: bulk deletion - design error feedback",
+      "status": "In Review",
+      "priority": "No Priority",
+      "issue_type": "Feature",
+      "description": "Jira Issue DHIS2-22046: [METADATA MANAGEMENT APP]: bulk deletion - design error feedback\nType: Feature | Status: In Review | Priority: No Priority\nComponents: [App] Metadata Management App\nDescription: We will determine how the metadata management app should display back information received during attempt to delete individual items.\n \nWe will need to provide some navigation between errors. (E.g. show a modal where total errors are summarised, and user can scroll through individual errors and expand to get details)\n \nWe may want to also provide links to other metadata (mentioned by Stian, e.g. when you cannot delete an object because of its association with other metadata objects)",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22046",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[app] metadata management app",
+      "node_type": "component",
+      "label": "Component [App] Metadata Management App",
+      "name": "[App] Metadata Management App",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-21925",
+      "node_type": "issue",
+      "label": "Issue DHIS2-21925",
+      "key": "DHIS2-21925",
+      "summary": "Visualization fails to open (500) when data dimension item sort order has a gap",
+      "status": "In Progress",
+      "priority": "No Priority",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-21925: Visualization fails to open (500) when data dimension item sort order has a gap\nType: Bug | Status: In Progress | Priority: No Priority\nComponents: [API] Metadata model\nDescription: Affected versions\n \nConfirmed live on  2.41  (production instance). The code path ( VisualizationController , Visualization.hbm.xml ) is unchanged in structure on current  master  (2.43-dev), so this likely affects all currently supported branches. Not yet audited version-by-version.\n \nSummary\n \nIf the  sort_order  values for a visualization's data dimension items ( visualization_datadimensionitems  table) contain a gap \u2014 i.e. are not a contiguous  0..n-1 sequence \u2014 the visualization fails to open (or appear in any list response) with an unhandled NullPointerException , returned to the client as an HTTP 500 with no useful error message.\n \nThis is not a data-visualizer-only bug: it affects  any  API call that returns the affected visualization in a list or as a single object, including the \"Open\" dialog's search/browse list, direct  GET /api/visualizations/{uid} , and dashboards that embed the visualization.\n \nSteps to reproduce\n Create a visualization with 3+ data dimension items. Directly manipulate the  sort_order  column of one of its rows in visualization_datadimensionitems  to introduce a gap (e.g. change  0, 1, 2  to  0, 1, 3 ). (In the production incident that surfaced this, something already in the system produced this gap organically \u2014 the exact code path that allows it has not yet been identified. See \"Root cause of the corruption\" below.) Attempt to open the visualization in Data Visualizer, or  GET /api/visualizations/{uid}?fields=... , or list visualizations with that one included in the result page. Observe HTTP 500 with an empty/unhelpful error body. \nRoot cause (of the crash)\n \nVisualizationController.postProcessResponseEntities()  / postProcessResponseEntity()  unconditionally call addExpressionDimensionItemElementsToDataDimensionItems(visualization)  for every visualization returned by the API. That method does:\n \n```// VisualizationController.java:203-204\nvisualization.getDataDimensionItems().stream()\n    .filter(ddi -> ddi.getExpressionDimensionItem() != null)```\n \nvisualization.getDataDimensionItems()  is backed by a Hibernate  indexed  <list>  mapping ( Visualization.hbm.xml:121-127 ,  <list-index column=\"sort_order\" base=\"0\"/> ). Hibernate reconstructs this list by allocating an array of size  max(sort_order) + 1  and placing each row at its  sort_order  index. If the  sort_order  sequence for a visualization has a gap, the missing index is silently left as a  null  array element \u2014  no exception is raised when the entity loads . The NPE only surfaces later, here, when the stream tries to call .getExpressionDimensionItem()  on the null element:\n \n```java.lang.NullPointerException: Cannot invoke \"org.hisp.dhis.common.DataDimensionItem.getExpressionDimensionItem()\" because \"ddi\" is null\n    at org.hisp.dhis.webapi.controller.VisualizationController.lambda$addExpressionDimensionItemElementsToDataDimensionItems$1(VisualizationController.java:204)\n    ...\n    at org.hisp.dhis.webapi.controller.VisualizationController.postProcessResponseEntities(VisualizationController.java:152)\n    at org.hisp.dhis.webapi.controller.AbstractFullReadOnlyController.getObjectList(AbstractFullReadOnlyController.java:240)```\n \nWhy the error is invisible in the logs\n \nCrudControllerAdvice.defaultExceptionHandler  \u2014 the catch-all  @ExceptionHandler(Exception.class) for anything not covered by the ~40 typed handlers above it \u2014 does:\n \n```@ExceptionHandler(Exception.class)\npublic WebMessage defaultExceptionHandler(Exception ex) {\n  ex.printStackTrace();\n  return error(getExceptionMessage(ex));\n}```\n \nprintStackTrace()  writes to raw  stderr , completely bypassing SLF4J/log4j2. This means the exception never reaches  dhis.log  at any log level, and depending on the deployment's log pipeline, may show up as a bare, contextless one-line entry with no stack trace at all (this is what happened in production \u2014 the only visible symptom was a single log line reading java.lang.NullPointerException , with no message and no trace, making the underlying bug very difficult to diagnose without direct access to raw, unprocessed stderr). This should be fixed separately (replace  ex.printStackTrace()  with a proper  log.error(\"...\", ex)  call) so future unhandled exceptions are actually diagnosable.\n \nRoot cause of the corruption (not yet identified)\n \nThe  sort_order  gap itself must originate from some code path that removes a data dimension item from a visualization's list without renumbering the remaining rows. This has not yet been traced \u2014 candidates are the visualization update/PATCH handler, or a metadata import/merge path. In the production instance where this was found, 13 visualizations were affected, each missing exactly one index (confirmed via SQL, no duplicate  sort_order  values found, ruling out a different corruption mechanism).\n \nImmediate mitigation (data repair, already applied in the reported instance)\n \n```begin;\nwith fix as (\n  select ctid,\n         row_number() over (partition by visualizationid order by sort_order) - 1 as new_sort_order\n  from visualization_datadimensionitems\n  where visualizationid in (<affected ids>)\n)\nupdate visualization_datadimensionitems v\nset sort_order = fix.new_sort_order\nfrom fix\nwhere v.ctid = fix.ctid;\ncommit;```\n \nFollowed by  POST /api/maintenance?cacheClear=true  to flush Hibernate's L2 cache (the mapping has <cache usage=\"read-write\"/> , and a direct-SQL fix bypasses Hibernate, so the running app would otherwise keep serving the stale, gapped collection from cache).\n \nProposed fix (this ticket)\n \nTwo parts, already drafted/implemented against  master  pending a ticket number to branch from:\n Data integrity check  (defensive/detective, ships regardless of root cause fix): a new yaml check,  analytical_objects/visualizations_wrong_sort_order.yaml , modeled directly on the existing  option_sets/option_sets_wrong_sort_order.yaml  pattern, flags any visualization whose visualization_datadimensionitems.sort_order  sequence has a gap. Severity  CRITICAL  (this causes a hard application error, unlike the option-sets version which is  INFO /cosmetic). Defensive code fix  (not yet written):  .filter(Objects::nonNull)  before the existing filter at  VisualizationController.java:203-204 , so a future gap degrades gracefully (skips the corrupted item) instead of 500ing the entire request. \nStill open / follow-up tickets to consider:\n \nFind and fix the actual deletion/update path that allows the  sort_order  gap to occur in the first place. Fix  CrudControllerAdvice.defaultExceptionHandler 's use of raw  printStackTrace()  so future unhandled exceptions are diagnosable via normal logging. MapView.hbm.xml  has the byte-identical  dataDimensionItems  list mapping ( mapview_datadimensionitems  table) \u2014 worth checking whether the same class of corruption can occur there, and whether a companion data integrity check is warranted.\n \nEvidence\n \nGlowroot trace and raw catalina.out capture from the reporting instance (available on request, not attached here \u2014 contains internal hostnames/session data). SQL confirmation of the gap on the reporting instance's  visualization_datadimensionitems  table (13 affected visualizations, each short by exactly one index). Direct SQL verification of the new data integrity check's  summary_sql / details_sql  against a clean Postgres instance, confirming correct detection of a seeded gap and no false positives on clean data.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-21925",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] metadata model",
+      "node_type": "component",
+      "label": "Component [API] Metadata model",
+      "name": "[API] Metadata model",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22226",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22226",
+      "key": "DHIS2-22226",
+      "summary": "Superuser cannot delete data values for a closed org unit, even with force=true",
+      "status": "Testing",
+      "priority": "No Priority",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22226: Superuser cannot delete data values for a closed org unit, even with force=true\nType: Bug | Status: Testing | Priority: No Priority\nComponents: [API] Data Entry, [API] Data Import\nDescription: Steps to Reproduce\n In the Maintenance app, open org unit  Ngelehun CHC  ( DiszpKrYNg8 ) and set a  Closed date    before September 2026 (for example 2026-01-01). Save. Open the Data Entry app for Ngelehun CHC, data set  Child Health , period  September 2026 .    A message says the org unit is closed, and the form is read-only. The existing values are still    shown. Still as the superuser, delete one of those existing values through the API (data element     Weight for age below lower line (red) , current value  7 ), with  force=true :\n \n```curl -u admin:district -X DELETE \\\n  \"https://play.im.dhis2.org/stable-2-43-2/api/dataValues?ds=BfMAe6Itzgt&de=bTcRDVjC66S&co=Prlt0C1RF0s&ou=DiszpKrYNg8&pe=202609&force=true\" \\\n     -w \"\\nHTTP %{http_code}\\n\"``` \nActual Result\n \nHTTP 409 , and the value is not deleted:\n \n```{\"httpStatus\":\"Conflict\",\"httpStatusCode\":409,\"status\":\"ERROR\",\"message\":\"Untimely data entry for org unit DiszpKrYNg8 and period(s): `[202609]`\",\"errorCode\":\"E8031\"}```\n \nSame result with and without  force=true . Bulk delete is blocked the same way: POST /api/dataValueSets?importStrategy=DELETE&force=true  returns status  ERROR , 0 deleted, and an E8031 conflict.\n \nNo user can delete these values through the API or the UI. The only workaround is to reopen the org unit (clear or move its closed date), delete the data, and then close it again, or directly remove the data with SQL.\n \nExpected Result\n \nThe value is deleted ( HTTP 204 ). A superuser, especially one using  force=true , should be able to clean up data that exists for an org unit after its closed date.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22226",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] data entry",
+      "node_type": "component",
+      "label": "Component [API] Data Entry",
+      "name": "[API] Data Entry",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[api] data import",
+      "node_type": "component",
+      "label": "Component [API] Data Import",
+      "name": "[API] Data Import",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22170",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22170",
+      "key": "DHIS2-22170",
+      "summary": "/eventCharts and /eventReports returns duplicates",
+      "status": "Done",
+      "priority": "No Priority",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22170: /eventCharts and /eventReports returns duplicates\nType: Bug | Status: Done | Priority: No Priority\nComponents: [API] Other\nDescription: Steps to Reproduce\n Call the API endpoint  /api/eventCharts.json?paging=false  (or  api/eventReports.json?paging=false ) \nActual Result\n \nThere are duplicates in the json returned\n \nExpected Result\n \nThere are NO duplicates in the items returned.\n \nNotes\n \nIn play, due to the small amount of eventCharts and eventReports, the issue is not happening",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22170",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22242",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22242",
+      "key": "DHIS2-22242",
+      "summary": "[Event] [A] 500 error when analytics caching is enabled and skipMeta=true",
+      "status": "Done",
+      "priority": "High",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22242: [Event] [A] 500 error when analytics caching is enabled and skipMeta=true\nType: Bug | Status: Done | Priority: High\nComponents: [API] Analytics\nDescription: Steps to Reproduce\n Go to a server with 43 or 44 and with analytics cache (eg 2 weeks) enabled and  https://play.im.dhis2.org/dev-2-43/api/analytics/events/aggregate/IpHINAT79UW?dimension=pe:LAST_12_MONTHS,ou:USER_ORGUNIT&skipMeta=true Do it with skipMeta=false \nActual Result\n \nStep 1 returns HTTP 500 with the message \"org.hisp.dhis.common.SlimPager\". Step 2 returns 200.\n \nExpected Result\n \nBoth requests return 200 with data.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22242",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22282",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22282",
+      "key": "DHIS2-22282",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22243",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22243",
+      "key": "DHIS2-22243",
+      "summary": "[Event] [A] Program-level date dimensions not included in metaData.dimensions when skipData=true",
+      "status": "Done",
+      "priority": "High",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22243: [Event] [A] Program-level date dimensions not included in metaData.dimensions when skipData=true\nType: Bug | Status: Done | Priority: High\nComponents: [API] Analytics\nDescription: Steps to Reproduce\n Request metadata only, with Enrollment date as a dimension:  https://play.im.dhis2.org/dev/api/analytics/events/aggregate/IpHINAT79UW?dimension=ou:USER_ORGUNIT,ENROLLMENT_DATE:LAST_12_MONTHS&skipMeta=false&skipData=true (Works as expected, just for comparison) Request metadata only, with the stage-level Event date instead:  https://play.im.dhis2.org/dev/api/analytics/events/aggregate/IpHINAT79UW?dimension=ou:USER_ORGUNIT,A03MvHHogjR.EVENT_DATE:LAST_12_MONTHS&skipMeta=false&skipData=true (Works as expected, just for comparison) Request the same as step 1, but with data included:  https://play.im.dhis2.org/dev/api/analytics/events/aggregate/IpHINAT79UW?dimension=ou:USER_ORGUNIT,ENROLLMENT_DATE:LAST_12_MONTHS&skipMeta=false&skipData=false \nActual Result\n \nStep 1, metaData.dimensions has no \"enrollmentdate\" entry.\n \n\n \nStep 2 includes \"A03MvHHogjR.eventdate\" with 12 periods\n \nStep 3 includes \"enrollmentdate\" with 12 periods.\n \n\n \nExpected Result\n \nStep 1 should include every requested dimension, including program-level dates, with the same periods as a full request\n \nStep 2 and 3 are as expected, just for comparison.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22243",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22252",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22252",
+      "key": "DHIS2-22252",
+      "summary": "[Event] [A] Analytics cache key ignores program stage and enrollment org unit",
+      "status": "In Review",
+      "priority": "No Priority",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22252: [Event] [A] Analytics cache key ignores program stage and enrollment org unit\nType: Bug | Status: In Review | Priority: No Priority\nComponents: [API] Analytics\nDescription: When analytics caching is enabled,  /analytics/events/aggregate  can return a cached response from a different request. This happens because the cache key leaves out the program stage of stage-prefixed items and all enrollment org unit ( ENROLLMENT_OU ) parameters.\n \nCause\n QueryItem.getProgramStageUid()  returns the program UID, not the stage UID ( dhis-api/.../common/QueryItem.java , line 230):\n \n```private String getProgramStageUid() {\n  return program != null ? program.getUid() : null;\n}```\n \nThe  programStageItem  part of the key is therefore the same for every stage of a program, so items from different stages (e.g.  A03MvHHogjR.ou  and  ZzYYXq4fJie.ou ) produce the same key. EventQueryParams.getKey()  leaves out all  enrollmentOu*  fields ( dhis-service-analytics/.../event/EventQueryParams.java , line 630).  enrollmentOuDimensionItems ,  enrollmentOuFilterItems ,  enrollmentOuDimensionLevels ,  enrollmentOuFilterLevels  and  enrollmentOuDimensionHierarchical  are not added to the key. The equivalent  registrationOu*  fields are added. \nExamples\n \ndimension=ZzYYXq4fJie.ou:USER_ORGUNIT  returned the cached result of an earlier  A03MvHHogjR.ou:USER_ORGUNIT  request, including that stage's header name. filter=ENROLLMENT_OU:O6uvpzGd5pu  returned the cached response of the same request without that filter, so the filter was not applied.\n \nExpected\n \nThe cache key should include the program stage UID of stage-prefixed query items and all enrollment org unit dimension and filter parameters, in the same way as  registrationOu* .",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22252",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22298",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22298",
+      "key": "DHIS2-22298",
+      "summary": "Depreciate and remove infrastructural settings from settings app",
+      "status": "Open",
+      "priority": "No Priority",
+      "issue_type": "Feature",
+      "description": "Jira Issue DHIS2-22298: Depreciate and remove infrastructural settings from settings app\nType: Feature | Status: Open | Priority: No Priority\nComponents: [App] Settings\nDescription: The three infrastructural settings were used by the old GIS app that was depreciated in V2.33 there does not appear to be any other use for these settings so they can be cleaned up from the settings menu",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22298",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[app] settings",
+      "node_type": "component",
+      "label": "Component [App] Settings",
+      "name": "[App] Settings",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22297",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22297",
+      "key": "DHIS2-22297",
+      "summary": "Add BMI-for-age z-score function (0\u201319 years) to the rule engine",
+      "status": "Open",
+      "priority": "No Priority",
+      "issue_type": "Feature",
+      "description": "Jira Issue DHIS2-22297: Add BMI-for-age z-score function (0\u201319 years) to the rule engine\nType: Feature | Status: Open | Priority: No Priority\nComponents: [API] Program rules, [Core] Expression Language\nDescription: Context\n \nPart of ROADMAP-627 (extend z-score\u2013based nutritional assessment to 5\u201319 years). Complements DHIS2-21993, which extends  d2:zScoreHFA  (5\u201319) and  d2:zScoreWFA  (5\u201310) using the WHO 2007 Growth Reference.\n \nDHIS2-21993 explicitly leaves a gap:  weight-for-height does not exist in the WHO reference for 5\u201319 years \u2014 WHO uses BMI-for-age instead.  Without a BMI-for-age function, implementations cannot automatically classify thinness, overweight or obesity for school-aged children and adolescents, which is the core indicator for school health programs.\n \nRequested by Egypt (MoH, school health program). They already run a well-baby tracker (<5) with automated z-scores (WFA, HFA, WFH), decision support and the growth chart widget, and want the same experience extended to 5\u201319 for the school health app, plus BMI curves given rising obesity trends. Today nurses classify manually or with paper-based tools, which introduces errors. Requested timeline: Oct\u2013Nov 2026.\n \nProposal\n \nAdd a new z-score function for  BMI-for-age  (e.g.  d2:zScoreBFA ), with male/female variants, implemented in the shared expression-parser / rule engine (backend, web and Android).\n \nReference tables (WHO, use the  Simplified field tables  to keep the same structure as the existing tables in  ZScoreTable.kt ):\n \n0\u20135 years:  WHO Child Growth Standards (2006) \u2013 BMI-for-age: https://www.who.int/tools/child-growth-standards/standards/body-mass-index-for-age-bmi-for-age 5\u201319 years:  WHO Growth Reference (2007) \u2013 BMI-for-age: https://www.who.int/tools/growth-reference-data-for-5to19-years/indicators/bmi-for-age\n \nTables file: https://github.com/dhis2/expression-parser/blob/main/src/commonMain/kotlin/org/hisp/dhis/lib/expression/math/ZScoreTable.kt\n \nAcceptance criteria\n \nNew function returns the BMI-for-age z-score for ages 0\u201319 years, male and female, consistent with the existing z-score functions (range -3 to +3, same rounding/behaviour). Works in program rules on backend, Capture web app and Android (shared rule engine). Results validated against WHO reference values / WHO AnthroPlus for a sample of ages and sexes (see also DHIS2-22201 on discrepancies with WHO calculations). Documented in the program rules / expression functions docs, including the WHO cut-offs implementers typically use (5\u201319: thinness < -2 SD, severe thinness < -3 SD, overweight > +1 SD, obesity > +2 SD).\n \nOpen questions\n \nFunction input: BMI value directly, or weight + height (computing BMI inside the function)? Keep the signature consistent with  d2:zScoreWFA(ageInMonths, weight, gender) . Age unit for 5\u201319 (WHO 2007 tables are in months) \u2014 confirm same convention as DHIS2-21993.\n \nOut of scope\n \nExtending the Capture growth chart widget/plugin to 5\u201319 and adding BMI curves (also requested by Egypt) \u2014 to be tracked separately under ROADMAP-627.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22297",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[core] expression language",
+      "node_type": "component",
+      "label": "Component [Core] Expression Language",
+      "name": "[Core] Expression Language",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-21993",
+      "node_type": "issue",
+      "label": "Issue DHIS2-21993",
+      "key": "DHIS2-21993",
+      "project_id": "dhis2/dhis2-core",
+      "summary": "Extend the range of zscore functions up to 19 years old",
+      "status": "In Review",
+      "priority": "High",
+      "issue_type": "Feature",
+      "description": "Jira Issue DHIS2-21993: Extend the range of zscore functions up to 19 years old\nType: Feature | Status: In Review | Priority: High\nComponents: [API] Program rules, [Core] Expression Language\nDescription: The d2:zscore functions are limited to the range 0-5 years old. These functions are only used in the Program rules (not supported in Program Indicator expressions). The program rule engine is a shared library used by backend, web and Android, so this functionality only has to be implemented in this shared Rule Engine.\n \nThe evaluation of zscore is based on a predefined tables located in the expression-parser. These tables are copy/pasted from the WHO recommendation. This recommendation is split into two segments: 0-5 years and 5-19 years. Currently, the expression-parser only includes the segment 0-5 years, so the purpose of this feature is to extend the support by including the 5-19 years reference.\n \nThere are three zscore functions ( d2:zScoreHFA ,  d2:zScoreWFA  and  d2:zScoreWFH ), each of them having the variants  male  and  female , so there are six tables in total.\n \nThe tables are defined in this file in the expression-parser:\n \n\n \nThese tables include the values in the range (-3, 3), which correspond with the extended tables of WHO ( tables for 0-5 years ).\n \nFor the range 5-19 years, the WHO has a reference that can be found here (use the  Simplified field tables  to get the same data structure as in the expression-parser):\n \nHeight-for-age:  available in the range 5-19 Weight-for-age:  available in the range 5-10 Weight-for-height:  not available. It uses BMI-for-age, which is not the same.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-21993"
+    },
+    {
+      "id": "issue:DHIS2-22112",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22112",
+      "key": "DHIS2-22112",
+      "summary": "Program rules are not evaluated in event/enrollment forms opened without an organisation unit selected",
+      "status": "Done",
+      "priority": "High",
+      "issue_type": "Bug",
+      "description": "Jira Issue DHIS2-22112: Program rules are not evaluated in event/enrollment forms opened without an organisation unit selected\nType: Bug | Status: Done | Priority: High\nComponents: [App] Capture\nDescription: Steps to reproduce\n \nEvent program:\n Open Capture Program \u2192 \"Antenatal care visit\".  Leave \"Organisation unit\" unselected. Click Create new event (The form opens with Organisation unit = None selected) Note the WHOMCH Smoking cessation counselling provided field is visible (it should be hidden by its rule). In WHOMCH Hemoglobin value, enter 5.\n \nActual:  no warning appears; rules are not evaluated. Expected:  \"Hemoglobin value lower than normal\" warning shows (as it does in 106.6.2). Now pick any facility in the form's Organisation unit field (e.g. Ngelehun CHC).\n \nThe warning appears immediately and the smoking-cessation field hides \u2192 rules now evaluate. \nTracker-program variant: Select a tracker program (e.g. Child Programme) \u2192  \"See working list without organisation unit\"  \u2192 open a person \u2192 add/edit an event.  The form loads with no org unit and rules stay silent (e.g. the low-APGAR comment warning doesn't fire) until an org unit is set.\n \nOriginal report: Program rules are not being evaluated or executed in Tracker programs when using Capture App from 106.6.3.\n \nThe same program rules, metadata, DHIS2 server and test cases work correctly when Capture App 106.6.2 is installed. After upgrading Capture to 106.6.3, the program rule actions are no longer applied.\n \nThis affects the business logic configured in the Tracker programs, including conditional field behavior, validations and other actions triggered by values entered in tracked entity attributes or program-stage data elements.\n \nPreconditions\n \nA Tracker program containing at least one enabled program rule. The program rule has a valid condition and an enabled program rule action. The rule can be reproduced successfully using Capture App 106.6.2.\n \nSteps to Reproduce\n Install or enable Capture App 106.6.3 onwards. Select a Tracker program containing previously validated program rules. Create a new tracked entity or open an existing enrollment. Enter or modify a value that satisfies a program rule condition. Observe whether the configured program rule action is applied. Downgrade Capture App to version 106.6.2. Repeat the same steps using the same DHIS2 server, metadata, user and test case. \nActual Result\n \nin Capture App from 106.6.3, the program rule condition does not produce the configured action. The program rules appear not to be evaluated or executed.\n \nNo changes were made to the program rule metadata between the tests.\n \nExpected Result\n \nProgram rules should be evaluated whenever the relevant tracked entity attribute or program-stage data element changes. When the rule condition evaluates to true, the corresponding action should be applied.\n \nThe behavior should be consistent with Capture App 106.6.2.\n \nRegression evidence\n \nCapture App 106.6.2: program rules work as expected. Capture App 106.6.3: the same program rules do not execute. Both tests use the same DHIS2 environment and program metadata. Reinstalling version 106.6.2 restores the expected behavior.\n \nCapture app versions 106.7.8, 107.0.5, 107.0.10 shows the same error.",
+      "url": "https://dhis2.atlassian.net/browse/DHIS2-22112",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:[app] capture",
+      "node_type": "component",
+      "label": "Component [App] Capture",
+      "name": "[App] Capture",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:1a269fc",
+      "node_type": "commit",
+      "label": "Commit 1a269fc",
+      "sha": "1a269fc5ffb9f9a5d485fa6e5e82506857849e01",
+      "short_sha": "1a269fc",
+      "author": "Jason Pickering",
+      "title": "Commit 1a269fc: fix: Resolve readable attribute option combos before the data value export [DHIS2-22290] (#25687)",
+      "message": "GitHub Commit 1a269fc by Jason Pickering (2026-10-16T06:52:45+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: Resolve readable attribute option combos before the data value export [DHIS2-22290] (#25687)\n\n* fix: Resolve readable attribute option combos before the data value export [DHIS2-22290]\n\nThe aoc_access MATERIALIZED CTE was estimated at 1 row but held every\ncategory option combo the user can read, disaggregations included, so\nPostgres could drive a nested loop from it and repeat the whole datavalue\nscan once per combo (39 minutes for 63 rows on a production instance).\n\nFor non-superusers the export query now first resolves the AOCs the user\nmay read in a small metadata query, run through the same query API, and\nfilters with a hash semi join over unnest of their ids:\n- option combos of ATTRIBUTE-type category combos whose category options\n  the user can all data-read, plus default, which has no sharing guard\n- limited to the requested data sets' attribute combos when the export\n  selects data sets only, and to the requested AOCs when given explicitly\n- an explicit false filter when nothing is left, since an empty array would\n  erase its own filter line\n\nExplicit AOCs are access checked against the same definition on every path,\nincluding the sync export which skipped the check. Values stored with an AOC\nthat is not an attribute option combo (an invalid configuration) are no\nlonger exported to non-superusers. Superusers are not restricted, so they\ncan find such data. Test fixtures that used a disaggregation combo as a data\nset's attribute combo are corrected.\n\n\ud83e\udd16 AI Assisted\n\n* fix: Address review of the upfront AOC access lookup [DHIS2-22290]\n\n- Resolve the readable AOCs in exportValues and return no values without\n  running the export query when the user can read none; the query takes\n  the list as a parameter (null for superusers, never empty).\n- Bind long id arrays as long[] instead of Long[] in QueryBuilder/SQL.Param.\n- Explicitly requested option combos that are not option combos of an\n  attribute (or the default) category combo now fail with E2049 instead\n  of E2011, so they are not mistaken for a sharing problem.\n- Add the datasets_non_attribute_category_combo data integrity check\n  (SEVERE) to find data sets whose category combo is of type\n  disaggregation.\n\n\ud83e\udd16 AI Assisted\n\n* fix: Add translation and count for the new data set integrity check [DHIS2-22290]\n\n\ud83e\udd16 AI Assisted\n\n* fix: Scope superuser data value exports to valid AOCs by default [DHIS2-22290]\n\nSuperusers now get the same attribute option combos as a fully shared\nuser unless they request AOCs explicitly: attribute combos and default\nonly, limited to the data set's attribute combo for data set exports.\nExplicitly requested AOCs are not restricted for superusers, so invalid\ndata can still be found on request.\n\n\ud83e\udd16 AI Assisted\n\n* Revert \"fix: Scope superuser data value exports to valid AOCs by default [DHIS2-22290]\"\n\nThis reverts commit 0441ae1e144621d5e736683decfc01e6931c4875.\n\nThe same export is used by data value sync and internal callers that\nmust see every value, so scoping superusers needs an explicit opt-in on\nthe API path and a value-level integrity check. That is left for a\nfollow-up; this PR only fixes the non-superuser export performance.\n\n\ud83e\udd16 AI Assisted\n\n* fix: Do not scope data set exports to the data set attribute combo [DHIS2-22290]\n\nWhether a data set selector should limit the exported values to the\ndata set's attribute combo is a behaviour question separate from the\nexport performance fix, so the readable AOC lookup no longer applies\nthat scope. It is left for discussion.\n\n\ud83e\udd16 AI Assisted\nLinked Jira Issues: DHIS2-22290\nModified Files: dhis-2/dhis-api/src/main/java/org/hisp/dhis/datavalue/DataExportStore.java, dhis-2/dhis-api/src/main/java/org/hisp/dhis/feedback/ErrorCode.java, dhis-2/dhis-api/src/main/java/org/hisp/dhis/sql/QueryBuilder.java, dhis-2/dhis-api/src/main/java/org/hisp/dhis/sql/SQL.java, dhis-2/dhis-services/dhis-service-administration/src/main/resources/data-integrity-checks.yaml, dhis-2/dhis-services/dhis-service-administration/src/main/resources/data-integrity-checks/datasets/datasets_non_attribute_category_combo.yaml, dhis-2/dhis-services/dhis-service-administration/src/test/java/org/hisp/dhis/dataintegrity/DataIntegrityYamlReaderTest.java, dhis-2/dhis-services/dhis-service-core/src/main/java/org/hisp/dhis/datavalue/hibernate/HibernateDataExportStore.java, dhis-2/dhis-services/dhis-service-core/src/main/resources/i18n_global.properties, dhis-2/dhis-services/dhis-service-core/src/test/java/org/hisp/dhis/datavalue/hibernate/DataExportQueryBuilderTest.java",
+      "timestamp": "2026-10-16T06:52:45+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/1a269fc5ffb9f9a5d485fa6e5e82506857849e01",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22290",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22290",
+      "key": "DHIS2-22290",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "commit:f0605f2",
+      "node_type": "commit",
+      "label": "Commit f0605f2",
+      "sha": "f0605f26d7c3acdf946de0121eff2d8ff0467be5",
+      "short_sha": "f0605f2",
+      "author": "dependabot[bot]",
+      "title": "Commit f0605f2: chore(deps): bump org.apache.tomcat.embed:tomcat-embed-core in /dhis-2 (#25756)",
+      "message": "GitHub Commit f0605f2 by dependabot[bot] (2026-10-16T06:45:50+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump org.apache.tomcat.embed:tomcat-embed-core in /dhis-2 (#25756)\n\nBumps org.apache.tomcat.embed:tomcat-embed-core from 11.0.26 to 11.0.27.\n\n---\nupdated-dependencies:\n- dependency-name: org.apache.tomcat.embed:tomcat-embed-core\n  dependency-version: 11.0.27\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/dhis-web-server/pom.xml",
+      "timestamp": "2026-10-16T06:45:50+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/f0605f26d7c3acdf946de0121eff2d8ff0467be5",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:b8da567",
+      "node_type": "commit",
+      "label": "Commit b8da567",
+      "sha": "b8da567fa7a59a46e440a10fd62ac3f865d6a3e6",
+      "short_sha": "b8da567",
+      "author": "dependabot[bot]",
+      "title": "Commit b8da567: chore(deps): bump io.github.classgraph:classgraph in /dhis-2 (#25758)",
+      "message": "GitHub Commit b8da567 by dependabot[bot] (2026-10-16T06:45:45+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump io.github.classgraph:classgraph in /dhis-2 (#25758)\n\nBumps [io.github.classgraph:classgraph](https://github.com/classgraph/classgraph) from 4.8.197 to 4.8.198.\n- [Release notes](https://github.com/classgraph/classgraph/releases)\n- [Commits](https://github.com/classgraph/classgraph/compare/classgraph-4.8.197...classgraph-4.8.198)\n\n---\nupdated-dependencies:\n- dependency-name: io.github.classgraph:classgraph\n  dependency-version: 4.8.198\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/pom.xml",
+      "timestamp": "2026-10-16T06:45:45+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/b8da567fa7a59a46e440a10fd62ac3f865d6a3e6",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:6dc0dd4",
+      "node_type": "commit",
+      "label": "Commit 6dc0dd4",
+      "sha": "6dc0dd44b7590f81aa7f5e84e5e797a060ca8efe",
+      "short_sha": "6dc0dd4",
+      "author": "dependabot[bot]",
+      "title": "Commit 6dc0dd4: chore(deps): bump org.flywaydb:flyway-database-postgresql in /dhis-2 (#25759)",
+      "message": "GitHub Commit 6dc0dd4 by dependabot[bot] (2026-10-16T06:45:38+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump org.flywaydb:flyway-database-postgresql in /dhis-2 (#25759)\n\nBumps org.flywaydb:flyway-database-postgresql from 13.9.0 to 13.10.0.\n\n---\nupdated-dependencies:\n- dependency-name: org.flywaydb:flyway-database-postgresql\n  dependency-version: 13.10.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/pom.xml",
+      "timestamp": "2026-10-16T06:45:38+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/6dc0dd44b7590f81aa7f5e84e5e797a060ca8efe",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:e1bfad9",
+      "node_type": "commit",
+      "label": "Commit e1bfad9",
+      "sha": "e1bfad9a788d5fe828db3595c54363f3e4453296",
+      "short_sha": "e1bfad9",
+      "author": "dependabot[bot]",
+      "title": "Commit e1bfad9: chore(deps): bump com.github.spotbugs:spotbugs in /dhis-2 (#25760)",
+      "message": "GitHub Commit e1bfad9 by dependabot[bot] (2026-10-16T06:45:26+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump com.github.spotbugs:spotbugs in /dhis-2 (#25760)\n\nBumps com.github.spotbugs:spotbugs from 4.10.4 to 4.10.5.\n\n---\nupdated-dependencies:\n- dependency-name: com.github.spotbugs:spotbugs\n  dependency-version: 4.10.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/pom.xml",
+      "timestamp": "2026-10-16T06:45:26+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/e1bfad9a788d5fe828db3595c54363f3e4453296",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:e0ef3bc",
+      "node_type": "commit",
+      "label": "Commit e0ef3bc",
+      "sha": "e0ef3bc740e5e4cc68e4f328a3744529b5ae27a0",
+      "short_sha": "e0ef3bc",
+      "author": "dependabot[bot]",
+      "title": "Commit e0ef3bc: chore(deps): bump org.apache.kafka:kafka-clients in /dhis-2 (#25699)",
+      "message": "GitHub Commit e0ef3bc by dependabot[bot] (2026-10-15T12:32:46+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump org.apache.kafka:kafka-clients in /dhis-2 (#25699)\n\nBumps org.apache.kafka:kafka-clients from 4.3.1 to 4.4.0.\n\n---\nupdated-dependencies:\n- dependency-name: org.apache.kafka:kafka-clients\n  dependency-version: 4.4.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/pom.xml",
+      "timestamp": "2026-10-15T12:32:46+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/e0ef3bc740e5e4cc68e4f328a3744529b5ae27a0",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:893968c",
+      "node_type": "commit",
+      "label": "Commit 893968c",
+      "sha": "893968c5593bad30babb65a341e4d7c12b82facb",
+      "short_sha": "893968c",
+      "author": "dependabot[bot]",
+      "title": "Commit 893968c: chore(deps-dev): bump org.seleniumhq.selenium:selenium-java (#25694)",
+      "message": "GitHub Commit 893968c by dependabot[bot] (2026-10-15T12:18:31+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps-dev): bump org.seleniumhq.selenium:selenium-java (#25694)\n\nBumps [org.seleniumhq.selenium:selenium-java](https://github.com/SeleniumHQ/selenium) from 4.50.0 to 4.51.0.\n- [Release notes](https://github.com/SeleniumHQ/selenium/releases)\n- [Commits](https://github.com/SeleniumHQ/selenium/compare/selenium-4.50.0...selenium-4.51.0)\n\n---\nupdated-dependencies:\n- dependency-name: org.seleniumhq.selenium:selenium-java\n  dependency-version: 4.51.0\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/dhis-test-e2e/pom.xml",
+      "timestamp": "2026-10-15T12:18:31+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/893968c5593bad30babb65a341e4d7c12b82facb",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:9e1100f",
+      "node_type": "commit",
+      "label": "Commit 9e1100f",
+      "sha": "9e1100f2abec4d332800e4fcaee6d93b8e559518",
+      "short_sha": "9e1100f",
+      "author": "dependabot[bot]",
+      "title": "Commit 9e1100f: chore(deps-dev): bump org.openapitools:openapi-generator in /dhis-2 (#25696)",
+      "message": "GitHub Commit 9e1100f by dependabot[bot] (2026-10-15T12:18:10+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps-dev): bump org.openapitools:openapi-generator in /dhis-2 (#25696)\n\nBumps [org.openapitools:openapi-generator](https://github.com/openapitools/openapi-generator) from 7.25.0 to 7.26.0.\n- [Release notes](https://github.com/openapitools/openapi-generator/releases)\n- [Changelog](https://github.com/OpenAPITools/openapi-generator/blob/master/docs/release-summary.md)\n- [Commits](https://github.com/openapitools/openapi-generator/compare/v7.25.0...v7.26.0)\n\n---\nupdated-dependencies:\n- dependency-name: org.openapitools:openapi-generator\n  dependency-version: 7.26.0\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/dhis-test-web-api/pom.xml",
+      "timestamp": "2026-10-15T12:18:10+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/9e1100f2abec4d332800e4fcaee6d93b8e559518",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:5b68153",
+      "node_type": "commit",
+      "label": "Commit 5b68153",
+      "sha": "5b6815301f4eef6c3103b1744cc5d3cf1f03d75f",
+      "short_sha": "5b68153",
+      "author": "dependabot[bot]",
+      "title": "Commit 5b68153: chore(deps): bump software.amazon.awssdk:bom in /dhis-2 (#25702)",
+      "message": "GitHub Commit 5b68153 by dependabot[bot] (2026-10-15T12:17:40+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump software.amazon.awssdk:bom in /dhis-2 (#25702)\n\nBumps software.amazon.awssdk:bom from 2.55.11 to 2.55.14.\n\n---\nupdated-dependencies:\n- dependency-name: software.amazon.awssdk:bom\n  dependency-version: 2.55.14\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/pom.xml",
+      "timestamp": "2026-10-15T12:17:40+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/5b6815301f4eef6c3103b1744cc5d3cf1f03d75f",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:c4fbf52",
+      "node_type": "commit",
+      "label": "Commit c4fbf52",
+      "sha": "c4fbf526fc6ad31defee4fae593be401103588b8",
+      "short_sha": "c4fbf52",
+      "author": "dependabot[bot]",
+      "title": "Commit c4fbf52: chore(deps): bump rest-assured.version in /dhis-2/dhis-test-e2e (#25691)",
+      "message": "GitHub Commit c4fbf52 by dependabot[bot] (2026-10-15T12:17:37+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump rest-assured.version in /dhis-2/dhis-test-e2e (#25691)\n\nBumps `rest-assured.version` from 6.0.1 to 6.1.0.\n\nUpdates `io.rest-assured:rest-assured` from 6.0.1 to 6.1.0\n- [Changelog](https://github.com/rest-assured/rest-assured/blob/master/changelog.txt)\n- [Commits](https://github.com/rest-assured/rest-assured/compare/rest-assured-6.0.1...rest-assured-6.1.0)\n\nUpdates `io.rest-assured:json-path` from 6.0.1 to 6.1.0\n- [Changelog](https://github.com/rest-assured/rest-assured/blob/master/changelog.txt)\n- [Commits](https://github.com/rest-assured/rest-assured/compare/rest-assured-6.0.1...rest-assured-6.1.0)\n\n---\nupdated-dependencies:\n- dependency-name: io.rest-assured:rest-assured\n  dependency-version: 6.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n- dependency-name: io.rest-assured:json-path\n  dependency-version: 6.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/dhis-test-e2e/pom.xml",
+      "timestamp": "2026-10-15T12:17:37+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/c4fbf526fc6ad31defee4fae593be401103588b8",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:b7510ce",
+      "node_type": "commit",
+      "label": "Commit b7510ce",
+      "sha": "b7510ce7c768065ef402faa0fb3145286a346e22",
+      "short_sha": "b7510ce",
+      "author": "dependabot[bot]",
+      "title": "Commit b7510ce: chore(deps): bump org.apache.httpcomponents.client5:httpclient5 (#25701)",
+      "message": "GitHub Commit b7510ce by dependabot[bot] (2026-10-15T12:17:25+00:00)\nRepository: dhis2/dhis2-core\nMessage: chore(deps): bump org.apache.httpcomponents.client5:httpclient5 (#25701)\n\nBumps [org.apache.httpcomponents.client5:httpclient5](https://github.com/apache/httpcomponents-client) from 5.6.4 to 5.6.5.\n- [Changelog](https://github.com/apache/httpcomponents-client/blob/rel/v5.6.5/RELEASE_NOTES.txt)\n- [Commits](https://github.com/apache/httpcomponents-client/compare/rel/v5.6.4...rel/v5.6.5)\n\n---\nupdated-dependencies:\n- dependency-name: org.apache.httpcomponents.client5:httpclient5\n  dependency-version: 5.6.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nLinked Jira Issues: None\nModified Files: dhis-2/pom.xml",
+      "timestamp": "2026-10-15T12:17:25+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/b7510ce7c768065ef402faa0fb3145286a346e22",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:dd04724",
+      "node_type": "commit",
+      "label": "Commit dd04724",
+      "sha": "dd047247752e5cfee04511cdbaefc1210815508a",
+      "short_sha": "dd04724",
+      "author": "netroms",
+      "title": "Commit dd04724: ci(deps): let Dependabot update Spring on 2.42 and 2.43 (#25647)",
+      "message": "GitHub Commit dd04724 by netroms (2026-10-15T10:18:56+00:00)\nRepository: dhis2/dhis2-core\nMessage: ci(deps): let Dependabot update Spring on 2.42 and 2.43 (#25647)\n\nThe 2.42 and 2.43 blocks ignored every Spring Framework and Spring Security\nrelease >= 6.0, copied from the 2.41 block where Spring 6 is a re-platform.\nBoth branches are on Spring Framework 6.2 and Spring Security 6.5, so no patch\nrelease was proposed: 2.43 stayed on Framework 6.2.8 (June 2025) although 6.2.19\nis on Maven Central.\n\nIgnore the next generation instead: Spring Framework and Spring Security >= 7.0,\nSpring Session core, Spring REST Docs and Spring LDAP >= 4.0, Spring Retry >= 3.0.\nSpring Data Redis and Spring Session Data Redis keep their >= 3.0 guard until\ntheir Spring 6 upgrade is done by hand. Spring Session core was not guarded and\nwould have been bumped to 4.1.1 on 2.43. The 2.41 block is unchanged.\nLinked Jira Issues: None\nModified Files: .github/dependabot.yml",
+      "timestamp": "2026-10-15T10:18:56+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/dd047247752e5cfee04511cdbaefc1210815508a",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:.github",
+      "node_type": "component",
+      "label": "Component .github",
+      "name": ".github",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:55bfcba",
+      "node_type": "commit",
+      "label": "Commit 55bfcba",
+      "sha": "55bfcbaf677b2739e4b798d1c8d32e63502960d6",
+      "short_sha": "55bfcba",
+      "author": "Jason Pickering",
+      "title": "Commit 55bfcba: fix: Keep the target's data values and approvals in an org unit merge [DHIS2-22296] (#25734)",
+      "message": "GitHub Commit 55bfcba by Jason Pickering (2026-10-15T09:03:58+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: Keep the target's data values and approvals in an org unit merge [DHIS2-22296] (#25734)\n\nWith the LAST_UPDATED strategy (the default, shown in Metadata Management\nas \"Move data values to the target organisation unit\") the merge first\ndeleted all of the target's data values and data approvals, then copied in\nthe most recent source rows only. Values only the target had were lost, and\nwhere both had a value the source always won, contrary to the UI's \"the\nmost recently updated is kept\". The deletes were hard deletes and were not\naudited.\n\nRank the target's own rows together with the sources' rows and upsert the\nwinners into the target, then delete the source rows. On a tie the target\nkeeps its own row; a tie between sources goes to the lowest org unit id so\nthe result is repeatable. Replayed on a copy of a production database:\ntarget 336 values -> 349 (its own plus 13 new keys from the source), every\nkey holding the newest value from either side; previously 336 -> 61.\n\n\ud83e\udd16 AI Assisted\nLinked Jira Issues: DHIS2-22296\nModified Files: dhis-2/dhis-services/dhis-service-administration/src/main/java/org/hisp/dhis/merge/orgunit/handler/DataOrgUnitMergeHandler.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/merge/orgunit/handler/DataOrgUnitMergeHandlerTest.java",
+      "timestamp": "2026-10-15T09:03:58+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/55bfcbaf677b2739e4b798d1c8d32e63502960d6",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:2a7855b",
+      "node_type": "commit",
+      "label": "Commit 2a7855b",
+      "sha": "2a7855b69e2426a4d1f011ea6b7c6efea3e92305",
+      "short_sha": "2a7855b",
+      "author": "radnov",
+      "title": "Commit 2a7855b: ci: find IM instances by their dhis2-v2 stack (#25682)",
+      "message": "GitHub Commit 2a7855b by radnov (2026-10-14T15:30:37+00:00)\nRepository: dhis2/dhis2-core\nMessage: ci: find IM instances by their dhis2-v2 stack (#25682)\nLinked Jira Issues: None\nModified Files: .github/workflows/deploy-instance.yml, jenkinsfiles/dev, jenkinsfiles/stable",
+      "timestamp": "2026-10-14T15:30:37+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/2a7855b69e2426a4d1f011ea6b7c6efea3e92305",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "component:jenkinsfiles",
+      "node_type": "component",
+      "label": "Component jenkinsfiles",
+      "name": "jenkinsfiles",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:4de3a02",
+      "node_type": "commit",
+      "label": "Commit 4de3a02",
+      "sha": "4de3a0273d4cd03d5dd82fbd4beaba2c2577a60b",
+      "short_sha": "4de3a02",
+      "author": "Jason Pickering",
+      "title": "Commit 4de3a02: fix: Do not load unloaded collections when building metadata audit entries [DHIS2-22235] (#25534)",
+      "message": "GitHub Commit 4de3a02 by Jason Pickering (2026-10-13T16:20:19+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: Do not load unloaded collections when building metadata audit entries [DHIS2-22235] (#25534)\n\n* fix: Do not load unloaded collections when building metadata audit entries [DHIS2-22235]\n\ncreateAuditEntry treated an unloaded PersistentCollection like an entity\nproxy and read it, so every update of a data set or org unit group loaded\nall of its org units after commit just to list their UIDs in the audit\nentry. This breaks the method's documented rule 2 (\"Do not include any lazy\nHibernateProxy or PersistentCollection that is not loaded\"). A collection\nthe request did not load is now left out; loaded collections are still\nwritten as before.\n\nOn a copy of a production database, changing only the sharing of a data\nset or org unit group with ~138k org units went from 2.7-3.3 s and a\n~1.9 MB audit entry to 0.03-0.16 s and ~1 KB.\n\n\ud83e\udd16 AI Assisted\n\n* fix: Write loaded empty collections as [] in metadata audit entries [DHIS2-22235]\n\nReview feedback: with unloaded collections left out, a loaded collection that the request\nemptied was also missing from the entry (putValueToMap dropped empty collections), so\n\"removed every org unit\" and \"changed only the sharing\" produced the same entry. A loaded\nempty collection is now written as [], so a missing key only means \"not loaded\". This\nmatches the delete path, which already writes empty collections.\n\nAlso moves the unloaded-collection check into a helper to keep createAuditEntry within\nthe cognitive complexity limit.\n\n\ud83e\udd16 AI Assisted\nLinked Jira Issues: DHIS2-22235\nModified Files: dhis-2/dhis-support/dhis-support-artemis/src/main/java/org/hisp/dhis/artemis/audit/listener/AbstractHibernateListener.java, dhis-2/dhis-support/dhis-support-artemis/src/test/java/org/hisp/dhis/artemis/audit/listener/AuditHibernateListenerTest.java",
+      "timestamp": "2026-10-13T16:20:19+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/4de3a0273d4cd03d5dd82fbd4beaba2c2577a60b",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22235",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22235",
+      "key": "DHIS2-22235",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "commit:9e02a45",
+      "node_type": "commit",
+      "label": "Commit 9e02a45",
+      "sha": "9e02a454c31532759a300923374b14f3be071afb",
+      "short_sha": "9e02a45",
+      "author": "Jan Bernitt",
+      "title": "Commit 9e02a45: fix: allow data value deletion of invalid data using force [DHIS2-22226] (#25513)",
+      "message": "GitHub Commit 9e02a45 by Jan Bernitt (2026-10-13T13:54:22+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: allow data value deletion of invalid data using force [DHIS2-22226] (#25513)\n\n* fix: allow data value deletetion of invalid data using force [DHIS2-22226]\n\n* fix: provide column types for update SQL\n\n* fix: logic skip bug, from index deletion list bug\n\n* fix: allow test setup to store deleted values\n\n* fix: bypass CDSR deletion locked check for superuser\n\n* test: adds test for force deletion\nLinked Jira Issues: DHIS2-22226\nModified Files: dhis-2/dhis-services/dhis-service-core/src/main/java/org/hisp/dhis/datavalue/DefaultDataEntryService.java, dhis-2/dhis-services/dhis-service-core/src/main/java/org/hisp/dhis/datavalue/hibernate/HibernateDataEntryStore.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/dxf2/datavalueset/DataExportServiceIntegrationTest.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/predictor/PredictionServiceTest.java, dhis-2/dhis-web-api/src/main/java/org/hisp/dhis/webapi/controller/CompleteDataSetRegistrationController.java",
+      "timestamp": "2026-10-13T13:54:22+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/9e02a454c31532759a300923374b14f3be071afb",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "commit:38357eb",
+      "node_type": "commit",
+      "label": "Commit 38357eb",
+      "sha": "38357ebf24a7c1efd3a8ef10fc4192995a6ec5b6",
+      "short_sha": "38357eb",
+      "author": "Jason Pickering",
+      "title": "Commit 38357eb: fix: include the indexed column in analytics table index names [DHIS2-22186] (#25438)",
+      "message": "GitHub Commit 38357eb by Jason Pickering (2026-10-13T11:13:37+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: include the indexed column in analytics table index names [DHIS2-22186] (#25438)\n\nSince 2.41, AnalyticsIndexHelper.getIndexes() has built each index name\nfrom col.getIndexColumns(), which is empty unless a column declares\nexplicit index columns. Every ordinary single-column index was therefore\nnamed in__ax_<year>_<code>, with no indication of the column it covers;\nonly the dx_co / dx_ao composite indexes kept a meaningful name.\n\nBuild the name from the columns the index is actually created on (the\nexplicit index columns, falling back to the column name), restoring the\n2.40 naming, e.g. in_uidlevel4_ax_2024_<code>. The derived _lower index\nnames reuse this name and are fixed too.\n\n\ud83e\udd16 AI Assisted\n\nCo-authored-by: Luciano Fiandesio <luciano@fiandesio.com>\nLinked Jira Issues: DHIS2-22186\nModified Files: dhis-2/dhis-services/dhis-service-analytics/src/main/java/org/hisp/dhis/analytics/util/AnalyticsIndexHelper.java, dhis-2/dhis-services/dhis-service-analytics/src/test/java/org/hisp/dhis/analytics/util/AnalyticsIndexHelperTest.java",
+      "timestamp": "2026-10-13T11:13:37+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/38357ebf24a7c1efd3a8ef10fc4192995a6ec5b6",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22186",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22186",
+      "key": "DHIS2-22186",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "commit:741c282",
+      "node_type": "commit",
+      "label": "Commit 741c282",
+      "sha": "741c282ab011b81d4af25c88ccd92f84c698cb13",
+      "short_sha": "741c282",
+      "author": "Jason Pickering",
+      "title": "Commit 741c282: perf: Speed up COC regeneration [DHIS2-22203] (#25468)",
+      "message": "GitHub Commit 741c282 by Jason Pickering (2026-10-13T08:19:19+00:00)\nRepository: dhis2/dhis2-core\nMessage: perf: Speed up COC regeneration [DHIS2-22203] (#25468)\n\n* perf: Make category option combo regeneration linear in the number of combos\n\nRegenerating the option combos of a large category combo (e.g. 5000 x 2 options, 10,000\ncombos) took ~15s, and was slower on master than on 2.41:\n\n- each persisted option combo was matched by scanning all generated option combos\n- each persisted option combo's category options were lazy loaded one query at a time\n- every generated option combo was linked back onto its category options, lazy loading\n  each option's full set of option combos, including for combos that already existed\n- a generated option combo computed its name on every getName() call by scanning each\n  category's option list\n\nGenerated option combos are now indexed by their category options, the persisted option\ncombos are preloaded with their options, only added option combos are linked back to their\noptions, and generated option combos are named once when generated.\n\n\ud83e\udd16 AI Assisted\n\n* test: Cover category option combo regeneration query count and naming\n\n- regenerating the option combos of a category combo must not lazy load per option combo\n  (15 vs 60 option combos give the same number of per-row loads)\n- regeneration adds the combos of a new option, deletes them when it is removed, and a\n  repeated run changes nothing\n- generated option combos are named exactly as an unnamed option combo computes its name,\n  including an option shared by two categories\n\n\ud83e\udd16 AI Assisted\n\n* refactor: Split up category option combo regeneration for Sonar\n\nMoves the generated option combo index into a record and the add-if-missing step into its\nown method, to reduce cognitive complexity and keep the indexing loop separate from the add\nloop. No behaviour change.\n\n\ud83e\udd16 AI Assisted\n\n* perf: Skip needless session flushes when regenerating category option combos\n\nThe preload queries only read, but each one auto flushed first, dirty\nchecking every entity already in the session: up to 10,000 COCs and\n5,000 category options for a large category combo. The preload queries\nnow use COMMIT flush mode, and the persisted COCs are loaded before\ngeneration, so the one remaining flush (the combo lookup by UID, which\nkeeps its sharing filter) runs before every category option is loaded.\n\n10,000 COCs: regenerate with nothing to add 345 -> 278ms, save the\ncategory combo 603 -> 541ms, regenerate all combos 1175 -> 794ms.\n\n\ud83e\udd16 AI Assisted\n\n* docs: Note preload skips flush [DHIS2-22203]\nLinked Jira Issues: DHIS2-22203\nModified Files: dhis-2/dhis-api/src/main/java/org/hisp/dhis/category/CategoryCombo.java, dhis-2/dhis-api/src/main/java/org/hisp/dhis/category/CategoryComboStore.java, dhis-2/dhis-api/src/main/java/org/hisp/dhis/category/CategoryOptionCombo.java, dhis-2/dhis-api/src/test/java/org/hisp/dhis/dataelement/CategoryComboTest.java, dhis-2/dhis-services/dhis-service-core/src/main/java/org/hisp/dhis/category/DefaultCategoryOptionComboGenerateService.java, dhis-2/dhis-services/dhis-service-core/src/main/java/org/hisp/dhis/category/hibernate/HibernateCategoryComboStore.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/category/CategoryOptionComboGenerateServiceTest.java",
+      "timestamp": "2026-10-13T08:19:19+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/741c282ab011b81d4af25c88ccd92f84c698cb13",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22203",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22203",
+      "key": "DHIS2-22203",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "commit:27329db",
+      "node_type": "commit",
+      "label": "Commit 27329db",
+      "sha": "27329db23282242b95cac30b96d25a8bebda81f9",
+      "short_sha": "27329db",
+      "author": "Jim Grace",
+      "title": "Commit 27329db: Predictor input with output COC [DHIS2-17719] (#25581)",
+      "message": "GitHub Commit 27329db by Jim Grace (2026-10-13T08:16:41+00:00)\nRepository: dhis2/dhis2-core\nMessage: Predictor input with output COC [DHIS2-17719] (#25581)\n\n* Predictor input with output COC [DHIS2-17719]\n\n* Fix SonarQube issues\nLinked Jira Issues: DHIS2-17719\nModified Files: dhis-2/dhis-api/src/main/java/org/hisp/dhis/category/CategoryOptionCombo.java, dhis-2/dhis-api/src/test/java/org/hisp/dhis/category/CategoryOptionComboTest.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/category/CategoryOptionComboStoreTest.java, dhis-2/dhis-test-integration/src/test/java/org/hisp/dhis/predictor/PredictionServiceTest.java",
+      "timestamp": "2026-10-13T08:16:41+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/27329db23282242b95cac30b96d25a8bebda81f9",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-17719",
+      "node_type": "issue",
+      "label": "Issue DHIS2-17719",
+      "key": "DHIS2-17719",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    },
+    {
+      "id": "commit:a091387",
+      "node_type": "commit",
+      "label": "Commit a091387",
+      "sha": "a091387eb0cdbf37e4fc4be7a93f57d24159567e",
+      "short_sha": "a091387",
+      "author": "Luciano Fiandesio",
+      "title": "Commit a091387: fix: read stage org unit from event table when ENROLLMENT_OU is used [DHIS2-22255] (#25579)",
+      "message": "GitHub Commit a091387 by Luciano Fiandesio (2026-10-12T10:32:36+00:00)\nRepository: dhis2/dhis2-core\nMessage: fix: read stage org unit from event table when ENROLLMENT_OU is used [DHIS2-22255] (#25579)\nLinked Jira Issues: DHIS2-22255\nModified Files: dhis-2/dhis-services/dhis-service-analytics/src/main/java/org/hisp/dhis/analytics/event/data/EventItemSelectColumnResolver.java, dhis-2/dhis-services/dhis-service-analytics/src/main/java/org/hisp/dhis/analytics/event/data/JdbcEventAnalyticsManager.java, dhis-2/dhis-services/dhis-service-analytics/src/test/java/org/hisp/dhis/analytics/event/data/EventItemSelectColumnResolverTest.java, dhis-2/dhis-test-e2e/src/test/java/org/hisp/dhis/analytics/event/aggregate/EventsAggregate11AutoTest.java, dhis-2/dhis-test-e2e/src/test/java/org/hisp/dhis/analytics/event/query/EventsQuery7AutoTest.java, dhis-2/dhis-test-e2e/src/test/java/org/hisp/dhis/analytics/generator/scenarios/event-aggregated.json, dhis-2/dhis-test-e2e/src/test/java/org/hisp/dhis/analytics/generator/scenarios/event-query.json",
+      "timestamp": "2026-10-12T10:32:36+00:00",
+      "url": "https://github.com/dhis2/dhis2-core/commit/a091387eb0cdbf37e4fc4be7a93f57d24159567e",
+      "project_id": "dhis2/dhis2-core"
+    },
+    {
+      "id": "issue:DHIS2-22255",
+      "node_type": "issue",
+      "label": "Issue DHIS2-22255",
+      "key": "DHIS2-22255",
+      "project_id": "dhis2/dhis2-core",
+      "status": "Referenced"
+    }
+  ],
+  "edges": [
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/dataValueSets",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:POST:/api/dataValueSets",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/analytics",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/organisationUnits",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/programs",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/trackedEntityInstances",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/events",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/dataElements",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "project:dhis2/dhis2-core",
+      "target": "endpoint:GET:/api/me",
+      "relationship": "EXPOSES_ENDPOINT"
+    },
+    {
+      "source": "issue:DHIS2-22296",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22296",
+      "target": "component:[api] other",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22301",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22301",
+      "target": "component:[api] tracker",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-19473",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-19473",
+      "target": "component:[api] analytics",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-19473",
+      "target": "issue:DHIS2-15084",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21748",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-21748",
+      "target": "component:[api] predictors",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-20446",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-20446",
+      "target": "component:[app] data entry",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-20446",
+      "target": "issue:LIBS-349",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-20446",
+      "target": "issue:DHIS2-21397",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21397",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-21397",
+      "target": "component:[app] data entry",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21397",
+      "target": "issue:DHIS2-21396",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21397",
+      "target": "issue:DHIS2-20446",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21397",
+      "target": "issue:DHIS2-19520",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "commit:801e071",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:801e071",
+      "target": "issue:DHIS2-22095",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:801e071",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22095",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:e05976b",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:e05976b",
+      "target": "issue:DHIS2-22138",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:e05976b",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22138",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:fd40e8f",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:fd40e8f",
+      "target": "issue:DHIS2-22281",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:fd40e8f",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22281",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:18a09bf",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:18a09bf",
+      "target": "issue:DHIS2-22296",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:18a09bf",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:08b1546",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:08b1546",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "endpoint:GET:/api/dataValueSets",
+      "target": "component:analytics",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/dataValueSets",
+      "target": "component:dataentry",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:POST:/api/dataValueSets",
+      "target": "component:dataentry",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/analytics",
+      "target": "component:analytics",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/organisationUnits",
+      "target": "component:organisationunits",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/organisationUnits",
+      "target": "component:hierarchy",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/programs",
+      "target": "component:tracker",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/programs",
+      "target": "component:programs",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/trackedEntityInstances",
+      "target": "component:tracker",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/events",
+      "target": "component:events",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/dataElements",
+      "target": "component:metadata",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "endpoint:GET:/api/me",
+      "target": "component:usermanagement",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22299",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22299",
+      "target": "component:[api] analytics",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22300",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22300",
+      "target": "component:[api] other",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22201",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22201",
+      "target": "component:[api] program rules",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22046",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22046",
+      "target": "component:[app] metadata management app",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21925",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-21925",
+      "target": "component:[api] metadata model",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22226",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22226",
+      "target": "component:[api] data entry",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22226",
+      "target": "component:[api] data import",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22170",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22170",
+      "target": "component:[api] other",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22242",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22242",
+      "target": "component:[api] analytics",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22242",
+      "target": "issue:DHIS2-22282",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22243",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22243",
+      "target": "component:[api] analytics",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22243",
+      "target": "issue:DHIS2-22282",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22252",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22252",
+      "target": "component:[api] analytics",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22298",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22298",
+      "target": "component:[app] settings",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22297",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22297",
+      "target": "component:[api] program rules",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22297",
+      "target": "component:[core] expression language",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22297",
+      "target": "issue:DHIS2-21993",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21993",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-21993",
+      "target": "component:[api] program rules",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21993",
+      "target": "component:[core] expression language",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-21993",
+      "target": "issue:DHIS2-22297",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "issue:DHIS2-22112",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "issue:DHIS2-22112",
+      "target": "component:[app] capture",
+      "relationship": "RELATED_TO"
+    },
+    {
+      "source": "commit:1a269fc",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:1a269fc",
+      "target": "issue:DHIS2-22290",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:1a269fc",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22290",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:f0605f2",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:f0605f2",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:b8da567",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:b8da567",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:6dc0dd4",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:6dc0dd4",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:e1bfad9",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:e1bfad9",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:e0ef3bc",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:e0ef3bc",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:893968c",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:893968c",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:9e1100f",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:9e1100f",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:5b68153",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:5b68153",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:c4fbf52",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:c4fbf52",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:b7510ce",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:b7510ce",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:dd04724",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:dd04724",
+      "target": "component:.github",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:55bfcba",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:55bfcba",
+      "target": "issue:DHIS2-22296",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:55bfcba",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:2a7855b",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:2a7855b",
+      "target": "component:.github",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:2a7855b",
+      "target": "component:jenkinsfiles",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:4de3a02",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:4de3a02",
+      "target": "issue:DHIS2-22235",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:4de3a02",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22235",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:9e02a45",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:9e02a45",
+      "target": "issue:DHIS2-22226",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:9e02a45",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "commit:38357eb",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:38357eb",
+      "target": "issue:DHIS2-22186",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:38357eb",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22186",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:741c282",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:741c282",
+      "target": "issue:DHIS2-22203",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:741c282",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22203",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:27329db",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:27329db",
+      "target": "issue:DHIS2-17719",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:27329db",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-17719",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:a091387",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    },
+    {
+      "source": "commit:a091387",
+      "target": "issue:DHIS2-22255",
+      "relationship": "REFERENCES_ISSUE"
+    },
+    {
+      "source": "commit:a091387",
+      "target": "component:dhis-2",
+      "relationship": "MODIFIES_COMPONENT"
+    },
+    {
+      "source": "issue:DHIS2-22255",
+      "target": "project:dhis2/dhis2-core",
+      "relationship": "BELONGS_TO"
+    }
+  ]
+}
