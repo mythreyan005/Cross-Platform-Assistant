@@ -17,15 +17,25 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 
 
-# Quick-start development settings - unsuitable for production
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-ufg-@peq)u-ul1fw)k(+is#1k-jnzd=a*bo*g6x+o9&h^8c_+r')
+from django.core.exceptions import ImproperlyConfigured
 
+# Quick-start development settings - unsuitable for production
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 't')
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        # Development fallback only
+        SECRET_KEY = 'django-insecure-dev-only-local-environment-key'
+    else:
+        raise ImproperlyConfigured("SECRET_KEY environment variable is required when DEBUG is False.")
 
 raw_hosts = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1')
-ALLOWED_HOSTS = ['*'] if (DEBUG and raw_hosts == '*') else [h.strip() for h in raw_hosts.split(',') if h.strip()]
+ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(',') if h.strip()]
+if not DEBUG and ('*' in ALLOWED_HOSTS or not ALLOWED_HOSTS):
+    raise ImproperlyConfigured("Wildcard '*' or empty ALLOWED_HOSTS is not permitted in production.")
 
 # API Keys & Integration Settings
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
@@ -136,11 +146,15 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': os.getenv('THROTTLE_ANON_RATE', '60/minute'),
         'user': os.getenv('THROTTLE_USER_RATE', '180/minute'),
+        'indexing': os.getenv('THROTTLE_INDEXING_RATE', '5/hour'),
     }
 }
 
 # CORS Configuration
 # Configurable origin whitelist with local dev defaults
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False').lower() in ('true', '1')
+if not DEBUG and CORS_ALLOW_ALL_ORIGINS:
+    raise ImproperlyConfigured("CORS_ALLOW_ALL_ORIGINS cannot be enabled when DEBUG is False.")
+
 raw_cors = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173')
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_cors.split(',') if origin.strip()]

@@ -10,7 +10,7 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle, ScopedRateThrottle
 
 try:
     from .rag_pipeline import ask_ai_hybrid, get_project_sync_status, load_and_index_data, normalize_repo
@@ -34,8 +34,8 @@ class ChatAPIView(APIView):
             if not groq_key:
                 logger.error("GROQ_API_KEY is missing from environment.")
                 return Response(
-                    {"error": "GROQ_API_KEY is not configured on the server. Please add it to your .env file."},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    {"error": "AI service configuration is missing on the server."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
                 )
 
             # Validate payload
@@ -101,6 +101,8 @@ class ReindexAPIView(APIView):
     Protected endpoint to trigger multi-source ingestion and Knowledge Graph rebuild.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'indexing'
 
     def post(self, request):
         repo = request.data.get("repo", "dhis2/dhis2-core")
@@ -112,7 +114,7 @@ class ReindexAPIView(APIView):
                 status=status.HTTP_200_OK
             )
         except Exception as e:
-            logger.error(f"Error during re-indexing: {e}")
+            logger.error(f"Error during re-indexing: {e}", exc_info=True)
             return Response(
                 {"error": "Failed to re-index repository."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

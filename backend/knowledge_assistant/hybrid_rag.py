@@ -124,32 +124,23 @@ class HybridGraphRAG:
                     if k.strip():
                         seed_entities.add(k.strip())
 
-        # 3. Knowledge Graph Traversal
+        # 3. Knowledge Graph Traversal (Bounded and Deduplicated across seeds)
         graph_context = ""
         graph_entities: List[Dict[str, Any]] = []
+        graph_edges: List[Dict[str, Any]] = []
 
         try:
             if seed_entities and self.knowledge_graph.graph.number_of_nodes() > 0:
                 logger.info(f"Traversing Knowledge Graph from seed entities: {seed_entities}")
-                graph_context = self.knowledge_graph.format_graph_context(
+                graph_entities, graph_edges, graph_context = self.knowledge_graph.get_subgraph_for_seeds(
                     list(seed_entities),
-                    max_depth=self.graph_depth
+                    max_depth=self.graph_depth,
+                    max_total_nodes=25
                 )
-
-                # Collect structured graph entities for response
-                all_discovered_nodes = {}
-                for seed in seed_entities:
-                    n_id = self.knowledge_graph.find_node(seed)
-                    if n_id:
-                        nodes, edges = self.knowledge_graph.get_related_entities(n_id, max_depth=self.graph_depth)
-                        for n in nodes:
-                            all_discovered_nodes[n["id"]] = n
-
-                graph_entities = list(all_discovered_nodes.values())
 
                 if graph_context and len(graph_entities) > 0:
                     retrieval_mode = "hybrid_graph_rag"
-                    logger.info(f"Hybrid Graph-RAG active: {len(graph_entities)} related graph nodes connected.")
+                    logger.info(f"Hybrid Graph-RAG active: {len(graph_entities)} nodes, {len(graph_edges)} edges connected.")
                 else:
                     logger.info("Graph traversal found no connecting relationships for seeds; vector-only fallback.")
             else:
@@ -159,16 +150,18 @@ class HybridGraphRAG:
             logger.error(f"Graph traversal error: {e}. Falling back to vector retrieval.")
             retrieval_mode = "vector_only"
             graph_context = ""
+            graph_entities = []
+            graph_edges = []
 
-        return vector_docs, graph_context, graph_entities, retrieval_mode
+        return vector_docs, graph_context, graph_entities, graph_edges, retrieval_mode
 
     def answer_question(self, question: str) -> Dict[str, Any]:
         """
         Runs the full Hybrid Graph-RAG process and formats a grounded response with citations.
         """
-        vector_docs, graph_context, graph_entities, retrieval_mode = self.retrieve(question)
+        vector_docs, graph_context, graph_entities, graph_edges, retrieval_mode = self.retrieve(question)
 
-        # Extract verified sources from vector docs
+        # Extract verified sources from vector docs and graph entities
         sources_map: Dict[str, Dict[str, Any]] = {}
         for doc in vector_docs:
             src_type = doc.metadata.get("source_type", "doc")
@@ -185,6 +178,34 @@ class HybridGraphRAG:
                     "url": url,
                     "status": doc.metadata.get("status", "")
                 }
+
+        for ge in graph_entities:
+            g_type = ge.get("type", "entity")
+            g_id = ge.get("id", "")
+            g_label = ge.get("label", g_id)
+            g_key = f"{g_type}:{g_id}"
+            if g_key not in sources_map and g_type != "project":
+                sources_map[g_key] = {
+                    "source_type": g_type,
+                    "source_id": g_id,
+                    "title": g_label,
+                    "url": ge.get("properties", {}).get("url", ""),
+                    "status": ge.get("properties", {}).get("status", "")
+                }
+
+        # Check for empty retrieval
+        if not vector_docs and not graph_entities:
+            return {
+                "answer": "No relevant documents or knowledge graph entities were found for this query in the repository.",
+                "repo": self.project_id,
+                "retrieval_mode": retrieval_mode,
+                "sources": [],
+                "graph_entities": [],
+                "graph_edges": [],
+                "evidence_count": 0,
+                "graph_node_count": 0,
+                "status": "EMPTY_RETRIEVAL"
+            }
 
         # Build fused context
         context_parts = []
@@ -229,16 +250,13 @@ class HybridGraphRAG:
             logger.info(f"Invoking Groq LLM with {retrieval_mode} context...")
             response = chain.invoke({"context": full_context, "question": question})
             answer_text = response.content
+            run_status = "SUCCESS"
         except Exception as e:
             logger.error(f"Error calling LLM: {e}")
-            return {
-                "answer": f"⚠️ An error occurred while generating the answer: {str(e)}",
-                "repo": self.project_id,
-                "retrieval_mode": retrieval_mode,
-                "sources": list(sources_map.values()),
-                "graph_entities": graph_entities,
-                "error": str(e)
-            }
+            # Generate grounded extractive fallback
+            fallback_snippets = [doc.page_content.strip()[:200] for doc in vector_docs[:3]]
+            answer_text = f"Extractive context ({len(vector_docs)} documents, {len(graph_entities)} graph entities retrieved):\n" + "\n\n".join(fallback_snippets)
+            run_status = "EXTRACTIVE_FALLBACK"
 
         return {
             "answer": answer_text,
@@ -246,6 +264,8 @@ class HybridGraphRAG:
             "retrieval_mode": retrieval_mode,
             "sources": list(sources_map.values()),
             "graph_entities": graph_entities,
+            "graph_edges": graph_edges,
             "evidence_count": len(vector_docs),
-            "graph_node_count": len(graph_entities)
+            "graph_node_count": len(graph_entities),
+            "status": run_status
         }

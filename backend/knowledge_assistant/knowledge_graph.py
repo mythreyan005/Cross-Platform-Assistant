@@ -313,6 +313,10 @@ class SoftwareKnowledgeGraph:
         """
         clean_id = identifier.strip()
 
+        # 0. If it is already an exact node ID in the graph, return it directly
+        if self.graph.has_node(clean_id):
+            return clean_id
+
         # 1. Try exact node ID prefix construction
         for prefix in (self._issue_node_id, self._commit_node_id, self._endpoint_node_id, self._component_node_id):
             cand = prefix(clean_id)
@@ -324,23 +328,48 @@ class SoftwareKnowledgeGraph:
         for n, data in self.graph.nodes(data=True):
             if data.get("key", "").lower() == clean_lower:
                 return n
-            if data.get("short_sha", "").lower() == clean_lower:
-                return n
-            if data.get("sha", "").lower() == clean_lower:
-                return n
             if data.get("name", "").lower() == clean_lower:
                 return n
             if data.get("path", "").lower() == clean_lower:
                 return n
 
+        # Check commit SHA matching with prefix tolerance (>= 7 chars)
+        for n, data in self.graph.nodes(data=True):
+            if data.get("node_type") == NodeType.COMMIT.value:
+                full_sha = data.get("sha", "").lower()
+                short_sha = data.get("short_sha", "").lower()
+                if full_sha == clean_lower or short_sha == clean_lower:
+                    return n
+                if len(clean_lower) >= 7 and (full_sha.startswith(clean_lower) or clean_lower.startswith(short_sha)):
+                    return n
+
         # 3. Substring matching for component keywords
         for n, data in self.graph.nodes(data=True):
             if data.get("node_type") == NodeType.COMPONENT.value:
                 comp_name = data.get("name", "").lower()
-                if comp_name and (comp_name in clean_lower or clean_lower in comp_name):
+                if comp_name and (comp_name == clean_lower or (len(clean_lower) > 3 and clean_lower in comp_name)):
                     return n
 
         return None
+
+    def remove_record(self, source_type: Any, source_id: str) -> bool:
+        """
+        Removes a record node and all its incident edges from the Knowledge Graph.
+        """
+        st = source_type.value if hasattr(source_type, "value") else str(source_type).lower()
+        node_id = None
+        if st in (SourceType.GITHUB.value, "github", "commit"):
+            node_id = self.find_node(source_id) or self._commit_node_id(source_id)
+        elif st in (SourceType.JIRA.value, "jira", "issue"):
+            node_id = self._issue_node_id(source_id)
+        elif st in (SourceType.OPENAPI.value, "openapi", "endpoint"):
+            node_id = self._endpoint_node_id(source_id)
+
+        if node_id and self.graph.has_node(node_id):
+            self.graph.remove_node(node_id)
+            logger.info(f"Removed node {node_id} and its incident edges from Knowledge Graph.")
+            return True
+        return False
 
     def get_related_entities(
         self,
@@ -352,14 +381,38 @@ class SoftwareKnowledgeGraph:
         Bounded BFS traversal to discover connected nodes and edges with cycle detection.
         Returns: (nodes_list, edges_list)
         """
-        if not self.graph.has_node(node_id):
-            return [], []
+        nodes, edges, _ = self.get_subgraph_for_seeds([node_id], max_depth=max_depth, max_total_nodes=max_nodes)
+        return nodes, edges
 
-        visited_nodes: Set[str] = {node_id}
+    def get_subgraph_for_seeds(
+        self,
+        seed_identifiers: List[str],
+        max_depth: int = 2,
+        max_total_nodes: int = 25
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], str]:
+        """
+        Bounded, cycle-safe BFS traversal across multiple seed entities with a global node budget.
+        Deduplicates nodes and edges, preserving exact edge provenance and structured edge data.
+        Returns: (nodes_list, edges_list, formatted_graph_context_string)
+        """
+        resolved_seeds = []
+        for s in seed_identifiers:
+            nid = s if self.graph.has_node(s) else self.find_node(s)
+            if nid and nid not in resolved_seeds:
+                resolved_seeds.append(nid)
+
+        if not resolved_seeds:
+            return [], [], ""
+
+        visited_nodes: Set[str] = set()
+        queue: List[Tuple[str, int]] = [(s, 0) for s in resolved_seeds]
+        for s in resolved_seeds:
+            visited_nodes.add(s)
+
         discovered_edges: List[Dict[str, Any]] = []
-        queue: List[Tuple[str, int]] = [(node_id, 0)]
+        seen_edges: Set[Tuple[str, str, str]] = set()
 
-        while queue and len(visited_nodes) < max_nodes:
+        while queue and len(visited_nodes) < max_total_nodes:
             curr, depth = queue.pop(0)
             if depth >= max_depth:
                 continue
@@ -367,26 +420,34 @@ class SoftwareKnowledgeGraph:
             # Forward edges
             for nbr in self.graph.successors(curr):
                 for k, edata in self.graph.get_edge_data(curr, nbr).items():
-                    discovered_edges.append({
-                        "source": curr,
-                        "target": nbr,
-                        "relationship": edata.get("relationship", "RELATED_TO"),
-                        "provenance": edata.get("provenance", "inferred")
-                    })
-                if nbr not in visited_nodes and len(visited_nodes) < max_nodes:
+                    rel = edata.get("relationship", "RELATED_TO")
+                    edge_key = (curr, nbr, rel)
+                    if edge_key not in seen_edges:
+                        seen_edges.add(edge_key)
+                        discovered_edges.append({
+                            "source": curr,
+                            "target": nbr,
+                            "relationship": rel,
+                            "provenance": edata.get("provenance", "inferred")
+                        })
+                if nbr not in visited_nodes and len(visited_nodes) < max_total_nodes:
                     visited_nodes.add(nbr)
                     queue.append((nbr, depth + 1))
 
             # Backward edges
             for nbr in self.graph.predecessors(curr):
                 for k, edata in self.graph.get_edge_data(nbr, curr).items():
-                    discovered_edges.append({
-                        "source": nbr,
-                        "target": curr,
-                        "relationship": edata.get("relationship", "RELATED_TO"),
-                        "provenance": edata.get("provenance", "inferred")
-                    })
-                if nbr not in visited_nodes and len(visited_nodes) < max_nodes:
+                    rel = edata.get("relationship", "RELATED_TO")
+                    edge_key = (nbr, curr, rel)
+                    if edge_key not in seen_edges:
+                        seen_edges.add(edge_key)
+                        discovered_edges.append({
+                            "source": nbr,
+                            "target": curr,
+                            "relationship": rel,
+                            "provenance": edata.get("provenance", "inferred")
+                        })
+                if nbr not in visited_nodes and len(visited_nodes) < max_total_nodes:
                     visited_nodes.add(nbr)
                     queue.append((nbr, depth + 1))
 
@@ -400,50 +461,39 @@ class SoftwareKnowledgeGraph:
                 "properties": {k: v for k, v in ndata.items() if k not in ("message", "description")}
             })
 
-        return nodes_result, discovered_edges
+        # Format factual relational statements with provenance
+        lines = []
+        if discovered_edges:
+            lines.append("=== VERIFIED KNOWLEDGE GRAPH RELATIONSHIPS (PROVENANCE-BACKED) ===")
+            nodes_map = {n["id"]: n for n in nodes_result}
+            for e in sorted(discovered_edges, key=lambda x: (x["source"], x["target"], x["relationship"])):
+                src, tgt, rel, prov = e["source"], e["target"], e["relationship"], e.get("provenance", "ground_truth")
+                src_node = nodes_map.get(src, self.graph.nodes.get(src, {}))
+                tgt_node = nodes_map.get(tgt, self.graph.nodes.get(tgt, {}))
+
+                src_label = src_node.get("label", src) if isinstance(src_node, dict) else src
+                tgt_label = tgt_node.get("label", tgt) if isinstance(tgt_node, dict) else tgt
+
+                extra = []
+                if isinstance(src_node, dict):
+                    props = src_node.get("properties", src_node)
+                    if props.get("author"):
+                        extra.append(f"Author: {props['author']}")
+                    if props.get("status"):
+                        extra.append(f"Status: {props['status']}")
+                extra_str = f" ({', '.join(extra)})" if extra else ""
+
+                lines.append(f"• [{rel}] {src_label}{extra_str}  -->  {tgt_label}  [Provenance: {prov}]")
+
+        formatted_context = "\n".join(lines)
+        return nodes_result, discovered_edges, formatted_context
 
     def format_graph_context(self, seed_entity_ids: List[str], max_depth: int = 2) -> str:
         """
         Extracts subgraphs for seed entities and renders human-readable factual relational statements with provenance.
         """
-        all_nodes: Dict[str, Dict[str, Any]] = {}
-        all_edges: Set[Tuple[str, str, str, str]] = set()
-
-        for seed in seed_entity_ids:
-            actual_node = self.find_node(seed)
-            if not actual_node:
-                continue
-
-            nodes, edges = self.get_related_entities(actual_node, max_depth=max_depth)
-            for n in nodes:
-                all_nodes[n["id"]] = n
-            for e in edges:
-                all_edges.add((e["source"], e["target"], e["relationship"], e.get("provenance", "ground_truth")))
-
-        if not all_edges and not all_nodes:
-            return ""
-
-        lines = ["=== VERIFIED KNOWLEDGE GRAPH RELATIONSHIPS (PROVENANCE-BACKED) ==="]
-
-        for src, tgt, rel, prov in sorted(list(all_edges)):
-            src_node = all_nodes.get(src, self.graph.nodes.get(src, {}))
-            tgt_node = all_nodes.get(tgt, self.graph.nodes.get(tgt, {}))
-
-            src_label = src_node.get("label", src) if isinstance(src_node, dict) else src
-            tgt_label = tgt_node.get("label", tgt) if isinstance(tgt_node, dict) else tgt
-
-            extra = []
-            if isinstance(src_node, dict):
-                props = src_node.get("properties", src_node)
-                if props.get("author"):
-                    extra.append(f"Author: {props['author']}")
-                if props.get("status"):
-                    extra.append(f"Status: {props['status']}")
-            extra_str = f" ({', '.join(extra)})" if extra else ""
-
-            lines.append(f"• [{rel}] {src_label}{extra_str}  -->  {tgt_label}  [Provenance: {prov}]")
-
-        return "\n".join(lines)
+        _, _, context_str = self.get_subgraph_for_seeds(seed_entity_ids, max_depth=max_depth)
+        return context_str
 
     def get_stats(self) -> Dict[str, Any]:
         """Returns node and edge summary statistics."""

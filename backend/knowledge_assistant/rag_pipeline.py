@@ -129,8 +129,8 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
     print(f"==================================================")
 
     vector_store = get_vector_store(repo_key)
-    kg = get_knowledge_graph(repo_key)
-    kg.ensure_project_node(config["name"])
+    new_kg = SoftwareKnowledgeGraph(project_id=repo_key)
+    new_kg.ensure_project_node(config["name"])
 
     all_records: List[SourceRecord] = []
 
@@ -142,7 +142,7 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
         max_results=max_issues
     )
     for jrec in jira_records:
-        kg.add_issue_record(jrec)
+        new_kg.add_issue_record(jrec)
         all_records.append(jrec)
     print(f"Retrieved {len(jira_records)} Jira issue records.")
 
@@ -153,7 +153,7 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
         max_commits=max_commits
     )
     for grec in github_records:
-        kg.add_commit_record(grec)
+        new_kg.add_commit_record(grec)
         all_records.append(grec)
     print(f"Retrieved {len(github_records)} GitHub commit records.")
 
@@ -164,28 +164,38 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
         project_id=repo_key
     )
     for orec in openapi_records:
-        kg.add_endpoint_record(orec)
+        new_kg.add_endpoint_record(orec)
         all_records.append(orec)
     print(f"Retrieved {len(openapi_records)} OpenAPI endpoint records.")
 
-    # Process chunks for Vector Store
+    # 4. Process chunks for Vector Store
     chunked_pairs = doc_processor.process_records(all_records)
     print(f"Split {len(all_records)} source records into {len(chunked_pairs)} vector chunks.")
 
-    if chunked_pairs:
-        chunk_ids = [cid for cid, _ in chunked_pairs]
-        docs = [d for _, d in chunked_pairs]
+    new_chunk_ids = [cid for cid, _ in chunked_pairs]
+    docs = [d for _, d in chunked_pairs]
 
-        # Use add_texts or add_documents with explicit deterministic IDs
-        try:
-            vector_store.add_documents(documents=docs, ids=chunk_ids)
+    # 5. Synchronize ChromaDB: remove obsolete chunks and insert/update current chunks
+    try:
+        existing_data = vector_store.get()
+        existing_ids = set(existing_data.get("ids", []))
+        obsolete_ids = existing_ids - set(new_chunk_ids)
+
+        if obsolete_ids:
+            print(f"Pruning {len(obsolete_ids)} obsolete vector chunks from ChromaDB...")
+            vector_store.delete(ids=list(obsolete_ids))
+
+        if docs:
+            vector_store.add_documents(documents=docs, ids=new_chunk_ids)
             print(f"Successfully indexed {len(docs)} chunks into ChromaDB.")
-        except Exception as e:
-            print(f"Error adding documents to ChromaDB: {e}")
+    except Exception as e:
+        logger.error(f"Critical error during vector store update: {e}", exc_info=True)
+        # CRITICAL: Do NOT persist new graph if vector store fails, to prevent state inconsistency!
+        raise RuntimeError(f"Vector store indexing failed: {e}") from e
 
-    # Persist Knowledge Graph
-    kg.save_to_file(config["graph_file"])
-    stats = kg.get_stats()
+    # 6. Atomic consistency: Only persist Knowledge Graph after vector store successfully updates
+    new_kg.save_to_file(config["graph_file"])
+    stats = new_kg.get_stats()
     print(f"Saved Knowledge Graph with {stats['total_nodes']} nodes and {stats['total_edges']} edges.\n")
 
     return {
