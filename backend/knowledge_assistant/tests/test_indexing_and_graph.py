@@ -10,8 +10,10 @@ import tempfile
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 
+from langchain_core.documents import Document
 from knowledge_assistant.models_data import SourceRecord, SourceType, NodeType, RelationshipType
 from knowledge_assistant.knowledge_graph import SoftwareKnowledgeGraph
+from knowledge_assistant.hybrid_rag import HybridGraphRAG
 from knowledge_assistant.rag_pipeline import (
     load_and_index_data,
     check_index_freshness,
@@ -333,3 +335,91 @@ class IndexingAndGraphTests(TestCase):
                 freshness_valid = check_index_freshness("dhis2/dhis2-core")
                 self.assertTrue(freshness_valid["is_fresh"])
                 self.assertEqual(freshness_valid["issues"], [])
+
+    def test_hybrid_rag_fallback_when_graph_empty(self):
+        """When knowledge graph is empty, retrieval mode must be vector_only_fallback with reason."""
+        empty_kg = SoftwareKnowledgeGraph(project_id="test/repo")
+        mock_vs = MagicMock()
+        mock_vs.similarity_search.return_value = [
+            Document(page_content="Commit fix for issue", metadata={"source_id": "commit:123", "source_type": "commit"})
+        ]
+
+        rag = HybridGraphRAG(
+            project_id="test/repo",
+            vector_store=mock_vs,
+            knowledge_graph=empty_kg,
+            groq_api_key="test_dummy_key"
+        )
+        vector_docs, graph_ctx, graph_entities, graph_edges, mode, reason = rag.retrieve("Which commit fixed TRNSPRTPCE-980?")
+        self.assertEqual(mode, "vector_only_fallback")
+        self.assertIn("EMPTY_GRAPH", reason)
+        self.assertEqual(len(vector_docs), 1)
+        self.assertEqual(graph_entities, [])
+        self.assertEqual(graph_edges, [])
+
+    def test_hybrid_rag_full_hybrid_when_entities_connected(self):
+        """When knowledge graph connects seed entities, mode must be hybrid_graph_rag."""
+        kg = SoftwareKnowledgeGraph(project_id="test/repo")
+        # Add issue and commit
+        issue_rec = SourceRecord(source_type=SourceType.JIRA, source_id="TRNSPRTPCE-980", project_id="test/repo", title="Issue", content="Text")
+        commit_rec = SourceRecord(
+            source_type=SourceType.GITHUB,
+            source_id="de74a89012345678901234567890123456789012",
+            project_id="test/repo",
+            title="Commit",
+            content="TRNSPRTPCE-980 fix",
+            metadata={"jira_keys": ["TRNSPRTPCE-980"]},
+            relationships=[{"target_type": "jira", "target_id": "TRNSPRTPCE-980", "relationship": "REFERENCES_ISSUE"}]
+        )
+        kg.add_issue_record(issue_rec)
+        kg.add_commit_record(commit_rec)
+
+        mock_vs = MagicMock()
+        mock_vs.similarity_search.return_value = [
+            Document(page_content="Commit text", metadata={"source_id": "de74a89012345678901234567890123456789012", "source_type": "commit"})
+        ]
+
+        rag = HybridGraphRAG(
+            project_id="test/repo",
+            vector_store=mock_vs,
+            knowledge_graph=kg,
+            groq_api_key="test_dummy_key"
+        )
+        vector_docs, graph_ctx, graph_entities, graph_edges, mode, reason = rag.retrieve("Which commit fixed TRNSPRTPCE-980?")
+        self.assertEqual(mode, "hybrid_graph_rag")
+        self.assertIsNone(reason)
+        self.assertGreater(len(graph_entities), 0)
+        self.assertGreater(len(graph_edges), 0)
+        self.assertIn("REFERENCES_ISSUE", graph_ctx)
+
+    @patch("knowledge_assistant.hybrid_rag.ChatPromptTemplate.from_messages")
+    def test_hybrid_rag_answer_question_returns_evidence_texts(self, mock_prompt_from_msgs):
+        """answer_question must return non-empty evidence_texts and evidence list containing vector doc content."""
+        empty_kg = SoftwareKnowledgeGraph(project_id="test/repo")
+        mock_vs = MagicMock()
+        doc_text = "This is verified documentation text for test endpoint."
+        mock_vs.similarity_search.return_value = [
+            Document(page_content=doc_text, metadata={"source_id": "GET /api/test", "source_type": "endpoint"})
+        ]
+
+        rag = HybridGraphRAG(
+            project_id="test/repo",
+            vector_store=mock_vs,
+            knowledge_graph=empty_kg,
+            groq_api_key="test_dummy_key"
+        )
+        # Mock LLM chain
+        mock_chain = MagicMock()
+        mock_chain.invoke.return_value = MagicMock(content="Mocked LLM answer about endpoint.")
+        rag.llm = MagicMock()
+        mock_prompt_from_msgs.return_value.__or__.return_value = mock_chain
+
+        res = rag.answer_question("What is /api/test?")
+        self.assertIn("evidence_texts", res)
+        self.assertIn("evidence", res)
+        self.assertEqual(res["evidence_texts"], [doc_text])
+        self.assertEqual(res["evidence"], [doc_text])
+        self.assertEqual(res["evidence_count"], 1)
+        self.assertFalse(res["is_full_hybrid"])
+        self.assertEqual(res["status"], "HYBRID_FALLBACK_VECTOR")
+

@@ -16,6 +16,7 @@ from evaluation.evaluate_rag import (
     calculate_retrieval_metrics,
     evaluate_relationship_recall,
     evaluate_groundedness,
+    validate_hybrid_execution,
     ClaimVerificationProtocol
 )
 
@@ -240,3 +241,73 @@ class EvaluationMetricsTests(TestCase):
         unsupported_conceptual = "The quantum encryption algorithm generates polymorphic cryptographic keys."
         res_unsupp = evaluate_groundedness(unsupported_conceptual, [], [], evidence_texts, status="SUCCESS")
         self.assertEqual(res_unsupp["score"], 0.0)
+
+    def test_validate_hybrid_execution_genuine_hybrid_success(self):
+        """A genuine hybrid run with retrieved entities and matching counts passes validation."""
+        valid_res = {
+            "retrieval_mode": "hybrid_graph_rag",
+            "status": "SUCCESS",
+            "graph_entities": [{"id": "issue:TRNSPRTPCE-980"}],
+            "graph_edges": [{"source": "commit:de74a89", "target": "issue:TRNSPRTPCE-980", "relationship": "REFERENCES_ISSUE"}],
+            "graph_node_count": 1,
+            "graph_edge_count": 1
+        }
+        status, mode, err = validate_hybrid_execution(valid_res)
+        self.assertEqual(status, "SUCCESS")
+        self.assertEqual(mode, "hybrid_graph_rag")
+        self.assertIsNone(err)
+
+    def test_validate_hybrid_execution_missing_retrieval_mode(self):
+        """Missing or unknown retrieval mode fails validation and produces INVALID_RETRIEVAL_MODE."""
+        bad_res = {
+            "status": "SUCCESS",
+            "graph_entities": [{"id": "issue:1"}]
+        }
+        status, mode, err = validate_hybrid_execution(bad_res)
+        self.assertEqual(status, "INVALID_RETRIEVAL_MODE")
+        self.assertIn("Invalid or missing retrieval_mode", err)
+
+    def test_validate_hybrid_execution_vector_fallback_classified_explicitly(self):
+        """Legitimate vector fallback is classified as HYBRID_FALLBACK_VECTOR, not full hybrid SUCCESS."""
+        fallback_res = {
+            "retrieval_mode": "vector_only_fallback",
+            "status": "HYBRID_FALLBACK_VECTOR",
+            "fallback_reason": "NO_CONNECTING_RELATIONSHIPS",
+            "graph_entities": [],
+            "graph_edges": [],
+            "graph_node_count": 0,
+            "graph_edge_count": 0
+        }
+        status, mode, reason = validate_hybrid_execution(fallback_res)
+        self.assertEqual(status, "HYBRID_FALLBACK_VECTOR")
+        self.assertEqual(mode, "vector_only_fallback")
+        self.assertEqual(reason, "NO_CONNECTING_RELATIONSHIPS")
+
+    def test_validate_hybrid_execution_zero_entities_claiming_hybrid_flagged(self):
+        """A run claiming hybrid_graph_rag but returning zero entities is flagged as INVALID_EXECUTION_MODE."""
+        invalid_res = {
+            "retrieval_mode": "hybrid_graph_rag",
+            "status": "SUCCESS",
+            "graph_entities": [],
+            "graph_edges": [],
+            "graph_node_count": 0,
+            "graph_edge_count": 0
+        }
+        status, mode, err = validate_hybrid_execution(invalid_res)
+        self.assertEqual(status, "INVALID_EXECUTION_MODE")
+        self.assertIn("0 graph entities retrieved", err)
+
+    def test_validate_hybrid_execution_count_mismatch_flagged(self):
+        """Mismatch between reported counts and actual list lengths is flagged as INVALID_METADATA."""
+        mismatched_res = {
+            "retrieval_mode": "hybrid_graph_rag",
+            "status": "SUCCESS",
+            "graph_entities": [{"id": "issue:1"}],
+            "graph_edges": [],
+            "graph_node_count": 10,  # Reported 10, actual 1
+            "graph_edge_count": 0
+        }
+        status, mode, err = validate_hybrid_execution(mismatched_res)
+        self.assertEqual(status, "INVALID_METADATA")
+        self.assertIn("graph_node_count mismatch", err)
+

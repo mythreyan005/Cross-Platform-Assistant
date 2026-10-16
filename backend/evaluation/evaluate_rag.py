@@ -529,6 +529,47 @@ def run_vector_only_rag(question: str, repo: str, groq_api_key: str, top_k: int 
     }
 
 
+def validate_hybrid_execution(res: Dict[str, Any]) -> Tuple[str, str, Optional[str]]:
+    """
+    Validates execution mode and consistency for Hybrid Graph-RAG results.
+    Returns: (validated_status, validated_retrieval_mode, diagnostic_error)
+    """
+    mode = res.get("retrieval_mode")
+    raw_status = res.get("status", "UNSPECIFIED")
+    entities = res.get("graph_entities", [])
+    edges = res.get("graph_edges", [])
+    node_count = res.get("graph_node_count", len(entities))
+    edge_count = res.get("graph_edge_count", len(edges))
+    fallback_reason = res.get("fallback_reason")
+
+    # 1. Check for missing or unknown retrieval_mode metadata
+    if not mode or mode not in ("hybrid_graph_rag", "vector_only_fallback", "vector_only"):
+        return "INVALID_RETRIEVAL_MODE", mode or "missing", f"Invalid or missing retrieval_mode: '{mode}'"
+
+    # 2. Validate count consistency with actual lists
+    if len(entities) != node_count:
+        return "INVALID_METADATA", mode, f"graph_node_count mismatch: {node_count} != len(entities)={len(entities)}"
+
+    if len(edges) != edge_count:
+        return "INVALID_METADATA", mode, f"graph_edge_count mismatch: {edge_count} != len(edges)={len(edges)}"
+
+    # 3. Handle legitimate vector fallback
+    if mode in ("vector_only_fallback", "vector_only"):
+        if raw_status in ("EXTRACTIVE_FALLBACK", "API_ERROR", "EMPTY_RETRIEVAL"):
+            return raw_status, mode, fallback_reason
+        return "HYBRID_FALLBACK_VECTOR", mode, fallback_reason or "Legitimate fallback to vector retrieval"
+
+    # 4. Handle genuine hybrid execution
+    if mode == "hybrid_graph_rag":
+        if len(entities) == 0:
+            return "INVALID_EXECUTION_MODE", mode, "retrieval_mode reported 'hybrid_graph_rag' but 0 graph entities retrieved"
+        if raw_status in ("EXTRACTIVE_FALLBACK", "API_ERROR", "EMPTY_RETRIEVAL"):
+            return raw_status, mode, None
+        return "SUCCESS", mode, None
+
+    return "INVALID_RETRIEVAL_MODE", mode, "Unknown mode"
+
+
 def run_hybrid_graph_rag(question: str, repo: str, groq_api_key: str, top_k: int = 5) -> Dict[str, Any]:
     """Runs Hybrid Graph-RAG combining vector similarity with Knowledge Graph traversal."""
     start_time = time.time()
@@ -549,6 +590,8 @@ def run_hybrid_graph_rag(question: str, repo: str, groq_api_key: str, top_k: int
     res = hybrid.answer_question(question)
     latency = time.time() - start_time
 
+    val_status, val_mode, diagnostic_err = validate_hybrid_execution(res)
+
     # Collect retrieved source IDs from documents and graph entities
     retrieved_source_ids = []
     for s in res.get("sources", []):
@@ -557,20 +600,29 @@ def run_hybrid_graph_rag(question: str, repo: str, groq_api_key: str, top_k: int
             retrieved_source_ids.append(sid)
 
     graph_edges = res.get("graph_edges", [])
-    evidence_texts = res.get("evidence", [])
+    graph_entities = res.get("graph_entities", [])
+    docs_evidence = res.get("evidence_texts", []) or res.get("evidence", [])
+    graph_ctx = res.get("graph_context", "")
+    evidence_texts = list(docs_evidence)
+    if graph_ctx:
+        evidence_texts.append(graph_ctx)
 
     return {
         "method": "hybrid_graph_rag",
         "answer": res.get("answer", ""),
-        "status": res.get("status", "SUCCESS"),
+        "status": val_status,
+        "raw_status": res.get("status", "SUCCESS"),
         "latency_sec": round(latency, 3),
         "docs_retrieved": res.get("evidence_count", 0),
-        "graph_nodes_count": res.get("graph_node_count", 0),
+        "graph_nodes_count": len(graph_entities),
         "graph_edges_count": len(graph_edges),
         "retrieved_source_ids": retrieved_source_ids,
+        "graph_entities": graph_entities,
         "graph_edges": graph_edges,
         "evidence_texts": evidence_texts,
-        "retrieval_mode": res.get("retrieval_mode", "vector_only")
+        "retrieval_mode": val_mode,
+        "diagnostic_error": diagnostic_err,
+        "fallback_reason": res.get("fallback_reason")
     }
 
 
@@ -599,7 +651,16 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
 
     # Reliability counters
     v_status_counts = {"SUCCESS": 0, "EXTRACTIVE_FALLBACK": 0, "EMPTY_RETRIEVAL": 0, "API_ERROR": 0}
-    h_status_counts = {"SUCCESS": 0, "EXTRACTIVE_FALLBACK": 0, "EMPTY_RETRIEVAL": 0, "API_ERROR": 0}
+    h_status_counts = {
+        "SUCCESS": 0,
+        "HYBRID_FALLBACK_VECTOR": 0,
+        "EXTRACTIVE_FALLBACK": 0,
+        "EMPTY_RETRIEVAL": 0,
+        "API_ERROR": 0,
+        "INVALID_RETRIEVAL_MODE": 0,
+        "INVALID_METADATA": 0,
+        "INVALID_EXECUTION_MODE": 0
+    }
 
     v_statuses = []
     h_statuses = []
@@ -677,7 +738,10 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
             },
             "hybrid_graph_rag": {
                 "status": h_res["status"],
+                "raw_status": h_res.get("raw_status"),
                 "retrieval_mode": h_res["retrieval_mode"],
+                "diagnostic_error": h_res.get("diagnostic_error"),
+                "fallback_reason": h_res.get("fallback_reason"),
                 "latency_sec": h_res["latency_sec"],
                 "docs_count": h_res["docs_retrieved"],
                 "graph_nodes_count": h_res["graph_nodes_count"],
@@ -732,12 +796,25 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
             },
             "hybrid_graph_rag": {
                 "total_queries": n,
-                "successful_runs": h_status_counts["SUCCESS"],
-                "fallback_runs": h_status_counts["EXTRACTIVE_FALLBACK"],
+                "full_hybrid_successful_runs": h_status_counts["SUCCESS"],
+                "fallback_vector_runs": h_status_counts.get("HYBRID_FALLBACK_VECTOR", 0),
+                "extractive_fallback_runs": h_status_counts["EXTRACTIVE_FALLBACK"],
                 "empty_retrieval_runs": h_status_counts["EMPTY_RETRIEVAL"],
                 "api_error_runs": h_status_counts["API_ERROR"],
-                "success_rate": round(h_status_counts["SUCCESS"] / n, 4),
-                "failure_rate": round((h_status_counts["EMPTY_RETRIEVAL"] + h_status_counts["API_ERROR"]) / n, 4)
+                "invalid_mode_runs": (
+                    h_status_counts.get("INVALID_RETRIEVAL_MODE", 0) +
+                    h_status_counts.get("INVALID_METADATA", 0) +
+                    h_status_counts.get("INVALID_EXECUTION_MODE", 0)
+                ),
+                "full_hybrid_success_rate": round(h_status_counts["SUCCESS"] / n, 4),
+                "overall_service_success_rate": round((h_status_counts["SUCCESS"] + h_status_counts.get("HYBRID_FALLBACK_VECTOR", 0)) / n, 4),
+                "failure_rate": round(
+                    (h_status_counts["EMPTY_RETRIEVAL"] +
+                     h_status_counts["API_ERROR"] +
+                     h_status_counts.get("INVALID_RETRIEVAL_MODE", 0) +
+                     h_status_counts.get("INVALID_METADATA", 0) +
+                     h_status_counts.get("INVALID_EXECUTION_MODE", 0)) / n, 4
+                )
             }
         },
         "aggregate_metrics": {

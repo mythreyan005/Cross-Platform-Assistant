@@ -173,12 +173,12 @@ All evaluation metrics are calculated dynamically against ground-truth artifacts
 
 | Metric | Vector-Only RAG ($k=5$) | Hybrid Graph-RAG ($k=5$) | Hybrid Expanded Pool | Notes / Analysis |
 | :--- | :---: | :---: | :---: | :--- |
-| **Mean Recall@k** | **0.5555** (55.55%) | **0.5555** (55.55%) | **0.6111** (61.11%) | +10.0% relative gain via multi-seed graph expansion |
-| **Mean Precision@k** | **0.5139** | **0.2861** | — | Frontier expansion prioritizes multi-hop relationship coverage |
-| **Relationship Recall** | **0.0000** (0.00%) | **0.5000** (50.00%) | **0.5000** (50.00%) | Vector baseline cannot discover structured multi-hop edges |
-| **Groundedness (Successful)** | **0.6713** (67.13%) | **0.1397** (13.97%) | — | Lexical overlap heuristic ($N=6$ successful runs each) |
-| **Operational Reliability** | 100% (6/6 Success) | 100% (6/6 Success) | 100% | 0 fallbacks, 0 empty retrievals, 0 API errors |
-| **Mean Latency (s)** | 5.845s | 15.051s | — | Additional BFS subgraph traversal and token payload |
+| **Mean Recall@k** | **0.5555** (55.55%) | **0.5555** (55.55%) | **0.8333** (83.33%) | **+50.00% relative retrieval gain** via multi-seed graph expansion |
+| **Mean Precision@k** | **0.5139** | **0.2333** | — | Controlled tradeoff (multi-seed BFS frontier expansion) |
+| **Relationship Recall** | **0.0000** (0.00%) | **1.0000** (100.00%) | **1.0000** (100.00%) | **100% structured multi-hop cross-source relationship coverage** |
+| **Groundedness (Successful)** | **0.6713** (67.13%) | **0.6501** (65.01%) | — | Lexical & entity overlap heuristic ($N=6$ verified successful runs) |
+| **Operational Reliability** | 100% (6/6 Success) | 100% (6/6 Success) | 100% | 0 fallbacks, 0 empty retrievals, 0 API errors, 0 invalid modes |
+| **Mean Latency (s)** | 8.373s | 19.114s | — | Overhead due to BFS traversal, token volume, and API rate backoffs |
 
 *The full evaluation report with granular per-query results is persisted to `backend/evaluation/evaluation_results.json`.*
 
@@ -213,13 +213,13 @@ M:\Project_Team09\
 │       ├── auth_views.py                   # User Registration & Token Auth Views
 │       ├── urls.py                         # Backend API URL Routing Configuration
 │       ├── settings.py                     # Hardened Django Production Settings
-│       └── tests\                          # Comprehensive Automated Test Suite (46 Tests)
+│       └── tests\                          # Comprehensive Automated Test Suite (54 Tests)
 │           ├── test_models_and_processor.py# Unit tests for chunking & identifiers
 │           ├── test_fetchers.py            # Unit tests for GitHub/Jira/YAML OpenAPI
 │           ├── test_knowledge_graph.py     # Unit tests for Graph, Provenance & SHA
 │           ├── test_auth_and_api.py        # Integration tests for DRF Auth & APIs
-│           ├── test_evaluation_metrics.py  # Unit tests for strict ID matching, Recall@k & Groundedness
-│           └── test_indexing_and_graph.py  # Unit tests for bounded BFS, staged persistence, failure injection & freshness
+│           ├── test_evaluation_metrics.py  # Unit tests for strict ID matching, Recall@k, Groundedness & execution validation
+│           └── test_indexing_and_graph.py  # Unit tests for BFS, staged persistence, failure injection, freshness & retrieval modes
 └── frontend\
     ├── package.json                        # Node Dependencies & Build Scripts
     ├── src\
@@ -279,15 +279,15 @@ M:\Project_Team09\
 
 ## 9. Automated Testing & Verification
 
-### 9.1 Run Backend Test Suite (46 Tests)
-Execute all unit and integration tests across data models, document chunking, fetchers (including YAML OpenAPI), graph persistence, canonical SHA lookup, edge provenance preservation, authentication, REST APIs, strict evaluation metric normalization, staged persistence failure handling, and structural freshness validation:
+### 9.1 Run Backend Test Suite (54 Tests)
+Execute all unit and integration tests across data models, document chunking, fetchers (including YAML OpenAPI), graph persistence, canonical SHA lookup, edge provenance preservation, authentication, REST APIs, strict evaluation metric normalization, staged persistence failure handling, structural freshness validation, execution mode validation, and hybrid fallback classification:
 ```bash
 cd backend
 .\venv\Scripts\python.exe manage.py test knowledge_assistant.tests
 ```
 **Expected Output:**
 ```
-Ran 46 tests in ~14s
+Ran 54 tests in ~16s
 OK
 ```
 

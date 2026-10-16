@@ -85,7 +85,7 @@ class HybridGraphRAG:
             timeout=30
         )
 
-    def retrieve(self, question: str) -> Tuple[List[Document], str, List[Dict[str, Any]], str]:
+    def retrieve(self, question: str) -> Tuple[List[Document], str, List[Dict[str, Any]], List[Dict[str, Any]], str, Optional[str]]:
         """
         Executes hybrid retrieval:
         1. Vector search in ChromaDB.
@@ -93,9 +93,10 @@ class HybridGraphRAG:
         3. Knowledge Graph traversal.
         4. Structured evidence fusion.
 
-        Returns: (vector_documents, graph_context_str, graph_entities, retrieval_mode)
+        Returns: (vector_documents, graph_context_str, graph_entities, graph_edges, retrieval_mode, fallback_reason)
         """
-        retrieval_mode = "vector_only"
+        retrieval_mode = "vector_only_fallback"
+        fallback_reason = None
         vector_docs: List[Document] = []
 
         # 1. Vector Retrieval
@@ -140,26 +141,33 @@ class HybridGraphRAG:
 
                 if graph_context and len(graph_entities) > 0:
                     retrieval_mode = "hybrid_graph_rag"
+                    fallback_reason = None
                     logger.info(f"Hybrid Graph-RAG active: {len(graph_entities)} nodes, {len(graph_edges)} edges connected.")
                 else:
+                    retrieval_mode = "vector_only_fallback"
+                    fallback_reason = "NO_CONNECTING_RELATIONSHIPS"
                     logger.info("Graph traversal found no connecting relationships for seeds; vector-only fallback.")
             else:
+                retrieval_mode = "vector_only_fallback"
+                fallback_reason = "NO_SEED_ENTITIES" if not seed_entities else "EMPTY_GRAPH"
                 logger.info("No identifiable entities found or empty graph; vector-only fallback.")
 
         except Exception as e:
             logger.error(f"Graph traversal error: {e}. Falling back to vector retrieval.")
-            retrieval_mode = "vector_only"
+            retrieval_mode = "vector_only_fallback"
+            fallback_reason = f"GRAPH_TRAVERSAL_ERROR: {e}"
             graph_context = ""
             graph_entities = []
             graph_edges = []
 
-        return vector_docs, graph_context, graph_entities, graph_edges, retrieval_mode
+        return vector_docs, graph_context, graph_entities, graph_edges, retrieval_mode, fallback_reason
 
     def answer_question(self, question: str) -> Dict[str, Any]:
         """
         Runs the full Hybrid Graph-RAG process and formats a grounded response with citations.
         """
-        vector_docs, graph_context, graph_entities, graph_edges, retrieval_mode = self.retrieve(question)
+        vector_docs, graph_context, graph_entities, graph_edges, retrieval_mode, fallback_reason = self.retrieve(question)
+        is_full_hybrid = (retrieval_mode == "hybrid_graph_rag")
 
         # Extract verified sources from vector docs and graph entities
         sources_map: Dict[str, Dict[str, Any]] = {}
@@ -199,11 +207,17 @@ class HybridGraphRAG:
                 "answer": "No relevant documents or knowledge graph entities were found for this query in the repository.",
                 "repo": self.project_id,
                 "retrieval_mode": retrieval_mode,
+                "is_full_hybrid": False,
+                "fallback_reason": fallback_reason or "EMPTY_RETRIEVAL",
                 "sources": [],
                 "graph_entities": [],
                 "graph_edges": [],
+                "evidence": [],
+                "evidence_texts": [],
+                "graph_context": "",
                 "evidence_count": 0,
                 "graph_node_count": 0,
+                "graph_edge_count": 0,
                 "status": "EMPTY_RETRIEVAL"
             }
 
@@ -250,22 +264,28 @@ class HybridGraphRAG:
             logger.info(f"Invoking Groq LLM with {retrieval_mode} context...")
             response = chain.invoke({"context": full_context, "question": question})
             answer_text = response.content
-            run_status = "SUCCESS"
+            run_status = "SUCCESS" if is_full_hybrid else "HYBRID_FALLBACK_VECTOR"
         except Exception as e:
             logger.error(f"Error calling LLM: {e}")
-            # Generate grounded extractive fallback
             fallback_snippets = [doc.page_content.strip()[:200] for doc in vector_docs[:3]]
             answer_text = f"Extractive context ({len(vector_docs)} documents, {len(graph_entities)} graph entities retrieved):\n" + "\n\n".join(fallback_snippets)
             run_status = "EXTRACTIVE_FALLBACK"
 
+        evidence_list = [d.page_content for d in vector_docs]
         return {
             "answer": answer_text,
             "repo": self.project_id,
             "retrieval_mode": retrieval_mode,
+            "is_full_hybrid": is_full_hybrid,
+            "fallback_reason": fallback_reason,
             "sources": list(sources_map.values()),
             "graph_entities": graph_entities,
             "graph_edges": graph_edges,
+            "evidence": evidence_list,
+            "evidence_texts": evidence_list,
+            "graph_context": graph_context,
             "evidence_count": len(vector_docs),
             "graph_node_count": len(graph_entities),
+            "graph_edge_count": len(graph_edges),
             "status": run_status
         }
