@@ -1,157 +1,440 @@
 {
-  "total_queries_evaluated": 4,
-  "avg_latency_vector_only_sec": 42.013,
-  "avg_latency_hybrid_rag_sec": 13.433,
-  "hybrid_retrieval_success_rate": "100%",
-  "evaluation_dataset": [
+  "benchmark_metadata": {
+    "total_queries_evaluated": 6,
+    "evaluation_date": "2026-10-16 15:58:33",
+    "groq_model": "qwen/qwen3.8-27b",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
+  },
+  "aggregate_metrics": {
+    "mean_recall_at_k": {
+      "vector_only": 0.6389,
+      "hybrid_graph_rag": 0.8611,
+      "relative_gain_percent": 34.78
+    },
+    "mean_precision_at_k": {
+      "vector_only": 0.5972,
+      "hybrid_graph_rag": 0.0793
+    },
+    "relationship_recall": {
+      "vector_only": 0.0,
+      "hybrid_graph_rag": 0.0
+    },
+    "groundedness_score": {
+      "vector_only": 0.5,
+      "hybrid_graph_rag": 0.9167
+    },
+    "mean_latency_sec": {
+      "vector_only": 7.812,
+      "hybrid_graph_rag": 20.609
+    }
+  },
+  "detailed_results": [
     {
       "id": "Q1",
-      "question": "Which GitHub commits are linked to Jira tickets in TransportPCE?",
+      "question": "Which GitHub commits are linked to Jira issue TRNSPRTPCE-980 in TransportPCE?",
       "repo": "opendaylight/transportpce",
+      "target_type": "commit_to_issue",
+      "expected_source_ids": [
+        "TRNSPRTPCE-980",
+        "de74a89",
+        "e10ac2a"
+      ],
+      "expected_relationship": "REFERENCES_ISSUE",
       "vector_only": {
-        "latency_sec": 59.617,
+        "latency_sec": 2.473,
         "docs_count": 5,
-        "entities_found": {
-          "jira_keys": [
-            "TRNSPRTPCE-1003",
-            "TRNSPRTPCE-990"
-          ],
-          "commit_shas": [
-            "bfd2c47",
-            "e3284e6"
-          ],
-          "endpoints": []
+        "retrieved_source_ids": [
+          "TRNSPRTPCE-1003",
+          "490a8fb",
+          "e10ac2a"
+        ],
+        "metrics": {
+          "recall_at_k": 0.3333,
+          "precision_at_k": 0.3333,
+          "relationship_recall": 0.0,
+          "groundedness": 0.3333
         }
       },
       "hybrid_graph_rag": {
-        "latency_sec": 2.325,
-        "docs_count": 2,
-        "graph_entities_count": 18,
-        "entities_found": {
-          "jira_keys": [
-            "TRNSPRTPCE-1000",
-            "TRNSPRTPCE-1003",
-            "TRNSPRTPCE-979"
-          ],
-          "commit_shas": [
-            "2e7e995",
-            "41d02f0",
-            "490a8fb",
-            "de74a89",
-            "e10ac2a",
-            "e3284e6"
-          ],
-          "endpoints": []
-        },
-        "retrieval_mode": "hybrid_graph_rag"
+        "latency_sec": 2.203,
+        "docs_count": 4,
+        "graph_entities_count": 19,
+        "retrieved_source_ids": [
+          "TRNSPRTPCE-1003",
+          "unknown",
+          "490a8fb",
+          "e10ac2a",
+          "issue:TRNSPRTPCE-999",
+          "endpoint:POST:/api/v1/service-path",
+          "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
+          "issue:TRNSPRTPCE-1001",
+          "issue:TRNSPRTPCE-980",
+          "issue:TRNSPRTPCE-1002",
+          "commit:2e7e995",
+          "commit:41d02f0",
+          "issue:TRNSPRTPCE-1003",
+          "commit:e10ac2a",
+          "commit:490a8fb",
+          "endpoint:GET:/api/v1/network",
+          "commit:de74a89",
+          "project:opendaylight/transportpce",
+          "endpoint:GET:/restconf/config/ietf-network:networks",
+          "issue:TRNSPRTPCE-1000",
+          "issue:TRNSPRTPCE-979",
+          "issue:TRNSPRTPCE-996",
+          "component:tapi"
+        ],
+        "discovered_relationships": [],
+        "retrieval_mode": "hybrid_graph_rag",
+        "metrics": {
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.1304,
+          "relationship_recall": 0.0,
+          "groundedness": 1.0
+        }
       }
     },
     {
       "id": "Q2",
       "question": "What API endpoints in DHIS2 handle analytical queries and data value sets?",
       "repo": "dhis2/dhis2-core",
+      "target_type": "api_endpoints",
+      "expected_source_ids": [
+        "GET /api/dataValueSets",
+        "POST /api/dataValueSets",
+        "GET /api/analytics"
+      ],
+      "expected_relationship": "EXPOSES_ENDPOINT",
       "vector_only": {
-        "latency_sec": 26.827,
+        "latency_sec": 1.415,
         "docs_count": 5,
-        "entities_found": {
-          "jira_keys": [],
-          "commit_shas": [],
-          "endpoints": [
-            "GET /api/analytics`**",
-            "GET /api/dataValueSets`**"
-          ]
+        "retrieved_source_ids": [
+          "GET /api/dataValueSets",
+          "GET /api/analytics"
+        ],
+        "metrics": {
+          "recall_at_k": 0.6667,
+          "precision_at_k": 1.0,
+          "relationship_recall": 0.0,
+          "groundedness": 0.6667
         }
       },
       "hybrid_graph_rag": {
-        "latency_sec": 3.686,
+        "latency_sec": 9.439,
         "docs_count": 3,
-        "graph_entities_count": 25,
-        "entities_found": {
-          "jira_keys": [],
-          "commit_shas": [],
-          "endpoints": [
-            "GET /api/analytics",
-            "GET /api/analytics`**",
-            "GET /api/dataValueSets",
-            "GET /api/dataValueSets`**",
-            "POST /api/dataValueSets",
-            "POST /api/dataValueSets`**",
-            "POST /api/dataValueSets`."
-          ]
-        },
-        "retrieval_mode": "hybrid_graph_rag"
+        "graph_entities_count": 26,
+        "retrieved_source_ids": [
+          "GET /api/dataValueSets",
+          "unknown",
+          "GET /api/analytics",
+          "component:dataentry",
+          "commit:fd40e8f",
+          "commit:e05976b",
+          "endpoint:GET:/api/programs",
+          "component:analytics",
+          "endpoint:GET:/api/dataValueSets",
+          "issue:DHIS2-22281",
+          "endpoint:POST:/api/dataValueSets",
+          "issue:DHIS2-20446",
+          "commit:801e071",
+          "issue:DHIS2-21748",
+          "endpoint:GET:/api/dataElements",
+          "issue:DHIS2-22301",
+          "endpoint:GET:/api/organisationUnits",
+          "commit:18a09bf",
+          "issue:DHIS2-22138",
+          "issue:DHIS2-19473",
+          "endpoint:GET:/api/me",
+          "endpoint:GET:/api/analytics",
+          "issue:DHIS2-21397",
+          "endpoint:GET:/api/trackedEntityInstances",
+          "endpoint:GET:/api/events",
+          "issue:DHIS2-22095",
+          "issue:DHIS2-22296",
+          "project:dhis2/dhis2-core",
+          "commit:08b1546"
+        ],
+        "discovered_relationships": [],
+        "retrieval_mode": "hybrid_graph_rag",
+        "metrics": {
+          "recall_at_k": 0.6667,
+          "precision_at_k": 0.069,
+          "relationship_recall": 0.0,
+          "groundedness": 1.0
+        }
       }
     },
     {
       "id": "Q3",
-      "question": "What bug fixes or code changes were made in TransportPCE for path computation?",
+      "question": "Which commits modified the tapi component in TransportPCE?",
       "repo": "opendaylight/transportpce",
+      "target_type": "commit_to_component",
+      "expected_source_ids": [
+        "de74a89",
+        "2e7e995",
+        "490a8fb"
+      ],
+      "expected_relationship": "MODIFIES_COMPONENT",
       "vector_only": {
-        "latency_sec": 36.553,
+        "latency_sec": 13.786,
         "docs_count": 5,
-        "entities_found": {
-          "jira_keys": [],
-          "commit_shas": [
-            "3028e61",
-            "f1fd920"
-          ],
-          "endpoints": [
-            "/TAPI"
-          ]
+        "retrieved_source_ids": [
+          "e10ac2a",
+          "2e7e995",
+          "e10ac2a"
+        ],
+        "metrics": {
+          "recall_at_k": 0.3333,
+          "precision_at_k": 0.5,
+          "relationship_recall": 0.0,
+          "groundedness": 0.0
         }
       },
       "hybrid_graph_rag": {
-        "latency_sec": 40.348,
-        "docs_count": 1,
-        "graph_entities_count": 0,
-        "entities_found": {
-          "jira_keys": [
-            "TRNSPRTPCE-944"
-          ],
-          "commit_shas": [
-            "3028e61",
-            "f1fd920"
-          ],
-          "endpoints": [
-            "/TAPI",
-            "POST /api/v1/service-path`:",
-            "POST /restconf/operations/transportpce-pce:path-computation-request`:"
-          ]
-        },
-        "retrieval_mode": "vector_only"
+        "latency_sec": 26.268,
+        "docs_count": 3,
+        "graph_entities_count": 19,
+        "retrieved_source_ids": [
+          "unknown",
+          "e10ac2a",
+          "2e7e995",
+          "issue:TRNSPRTPCE-999",
+          "issue:TRNSPRTPCE-980",
+          "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
+          "commit:2e7e995",
+          "commit:de74a89",
+          "issue:TRNSPRTPCE-1000",
+          "issue:TRNSPRTPCE-979",
+          "issue:TRNSPRTPCE-996",
+          "endpoint:POST:/api/v1/service-path",
+          "issue:TRNSPRTPCE-1001",
+          "issue:TRNSPRTPCE-1003",
+          "endpoint:GET:/api/v1/network",
+          "project:opendaylight/transportpce",
+          "endpoint:GET:/restconf/config/ietf-network:networks",
+          "commit:e10ac2a",
+          "component:tapi",
+          "commit:41d02f0",
+          "issue:TRNSPRTPCE-1002",
+          "commit:490a8fb"
+        ],
+        "discovered_relationships": [],
+        "retrieval_mode": "hybrid_graph_rag",
+        "metrics": {
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.1364,
+          "relationship_recall": 0.0,
+          "groundedness": 1.0
+        }
       }
     },
     {
       "id": "Q4",
-      "question": "What user profile information is accessible via DHIS2 API endpoints?",
+      "question": "What user profile information and settings are accessible via the DHIS2 API?",
       "repo": "dhis2/dhis2-core",
+      "target_type": "api_endpoints",
+      "expected_source_ids": [
+        "GET /api/me",
+        "GET /api/me/authorization"
+      ],
+      "expected_relationship": "EXPOSES_ENDPOINT",
       "vector_only": {
-        "latency_sec": 45.056,
+        "latency_sec": 13.577,
         "docs_count": 5,
-        "entities_found": {
-          "jira_keys": [],
-          "commit_shas": [],
-          "endpoints": [
-            "GET /api/me`"
-          ]
+        "retrieved_source_ids": [
+          "GET /api/me",
+          "GET /api/trackedEntityInstances"
+        ],
+        "metrics": {
+          "recall_at_k": 1.0,
+          "precision_at_k": 1.0,
+          "relationship_recall": 0.0,
+          "groundedness": 0.5
         }
       },
       "hybrid_graph_rag": {
-        "latency_sec": 7.372,
+        "latency_sec": 37.129,
         "docs_count": 3,
-        "graph_entities_count": 25,
-        "entities_found": {
-          "jira_keys": [],
-          "commit_shas": [],
-          "endpoints": [
-            "/case",
-            "GET /api/me`",
-            "GET /api/me`**",
-            "GET /api/programs`**",
-            "GET /api/trackedEntityInstances`**"
-          ]
-        },
-        "retrieval_mode": "hybrid_graph_rag"
+        "graph_entities_count": 26,
+        "retrieved_source_ids": [
+          "GET /api/me",
+          "unknown",
+          "GET /api/trackedEntityInstances",
+          "component:tracker",
+          "commit:fd40e8f",
+          "commit:e05976b",
+          "endpoint:GET:/api/programs",
+          "endpoint:GET:/api/dataValueSets",
+          "issue:DHIS2-22281",
+          "commit:08b1546",
+          "endpoint:POST:/api/dataValueSets",
+          "issue:DHIS2-20446",
+          "commit:801e071",
+          "issue:DHIS2-21748",
+          "endpoint:GET:/api/dataElements",
+          "issue:DHIS2-22301",
+          "endpoint:GET:/api/organisationUnits",
+          "commit:18a09bf",
+          "issue:DHIS2-22138",
+          "issue:DHIS2-19473",
+          "endpoint:GET:/api/me",
+          "endpoint:GET:/api/analytics",
+          "issue:DHIS2-21397",
+          "endpoint:GET:/api/trackedEntityInstances",
+          "endpoint:GET:/api/events",
+          "issue:DHIS2-22095",
+          "issue:DHIS2-22296",
+          "project:dhis2/dhis2-core",
+          "component:usermanagement"
+        ],
+        "discovered_relationships": [],
+        "retrieval_mode": "hybrid_graph_rag",
+        "metrics": {
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.069,
+          "relationship_recall": 0.0,
+          "groundedness": 0.5
+        }
+      }
+    },
+    {
+      "id": "Q5",
+      "question": "What RESTCONF RPC operations and endpoints are available for path computation in TransportPCE?",
+      "repo": "opendaylight/transportpce",
+      "target_type": "api_endpoints",
+      "expected_source_ids": [
+        "POST /restconf/operations/transportpce-pce:path-computation-request"
+      ],
+      "expected_relationship": "RELATED_TO",
+      "vector_only": {
+        "latency_sec": 1.498,
+        "docs_count": 5,
+        "retrieved_source_ids": [
+          "POST /restconf/operations/transportpce-pce:path-computation-request",
+          "POST /api/v1/service-path"
+        ],
+        "metrics": {
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.5,
+          "relationship_recall": 0.0,
+          "groundedness": 1.0
+        }
+      },
+      "hybrid_graph_rag": {
+        "latency_sec": 2.626,
+        "docs_count": 3,
+        "graph_entities_count": 21,
+        "retrieved_source_ids": [
+          "POST /restconf/operations/transportpce-pce:path-computation-request",
+          "unknown",
+          "POST /api/v1/service-path",
+          "issue:TRNSPRTPCE-999",
+          "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
+          "issue:TRNSPRTPCE-980",
+          "commit:2e7e995",
+          "component:pce",
+          "commit:de74a89",
+          "issue:TRNSPRTPCE-1000",
+          "issue:TRNSPRTPCE-979",
+          "issue:TRNSPRTPCE-996",
+          "endpoint:POST:/api/v1/service-path",
+          "issue:TRNSPRTPCE-1001",
+          "issue:TRNSPRTPCE-1003",
+          "endpoint:GET:/api/v1/network",
+          "project:opendaylight/transportpce",
+          "endpoint:GET:/restconf/config/ietf-network:networks",
+          "component:routing",
+          "commit:e10ac2a",
+          "commit:41d02f0",
+          "issue:TRNSPRTPCE-1002",
+          "commit:490a8fb",
+          "component:operations"
+        ],
+        "discovered_relationships": [],
+        "retrieval_mode": "hybrid_graph_rag",
+        "metrics": {
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.0417,
+          "relationship_recall": 0.0,
+          "groundedness": 1.0
+        }
+      }
+    },
+    {
+      "id": "Q6",
+      "question": "What bug is reported in DHIS2-22296 regarding org unit merge and which API endpoints are involved?",
+      "repo": "dhis2/dhis2-core",
+      "target_type": "cross_source_issue_endpoint",
+      "expected_source_ids": [
+        "DHIS2-22296",
+        "POST /api/organisationUnits/merge"
+      ],
+      "expected_relationship": "REFERENCES_ISSUE",
+      "vector_only": {
+        "latency_sec": 14.121,
+        "docs_count": 5,
+        "retrieved_source_ids": [
+          "55bfcba",
+          "DHIS2-22296",
+          "55bfcba",
+          "a091387",
+          "e05976b"
+        ],
+        "metrics": {
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.25,
+          "relationship_recall": 0.0,
+          "groundedness": 0.5
+        }
+      },
+      "hybrid_graph_rag": {
+        "latency_sec": 45.991,
+        "docs_count": 4,
+        "graph_entities_count": 30,
+        "retrieved_source_ids": [
+          "55bfcba",
+          "DHIS2-22296",
+          "a091387",
+          "e05976b",
+          "commit:fd40e8f",
+          "commit:e05976b",
+          "endpoint:GET:/api/programs",
+          "endpoint:GET:/api/dataValueSets",
+          "issue:DHIS2-22281",
+          "endpoint:POST:/api/dataValueSets",
+          "issue:DHIS2-22255",
+          "issue:DHIS2-20446",
+          "commit:801e071",
+          "issue:DHIS2-21748",
+          "endpoint:GET:/api/dataElements",
+          "issue:DHIS2-22301",
+          "endpoint:GET:/api/organisationUnits",
+          "commit:a091387",
+          "commit:18a09bf",
+          "issue:DHIS2-22138",
+          "issue:DHIS2-19473",
+          "endpoint:GET:/api/me",
+          "endpoint:GET:/api/analytics",
+          "issue:DHIS2-21397",
+          "endpoint:GET:/api/trackedEntityInstances",
+          "endpoint:GET:/api/events",
+          "issue:DHIS2-22095",
+          "issue:DHIS2-22296",
+          "project:dhis2/dhis2-core",
+          "component:dhis-2",
+          "commit:08b1546",
+          "component:[api] other",
+          "commit:55bfcba",
+          "issue:DHIS2-22299"
+        ],
+        "discovered_relationships": [],
+        "retrieval_mode": "hybrid_graph_rag",
+        "metrics": {
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.0294,
+          "relationship_recall": 0.0,
+          "groundedness": 1.0
+        }
       }
     }
   ]

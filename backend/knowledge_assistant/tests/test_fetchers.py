@@ -56,3 +56,30 @@ class FetcherTests(TestCase):
         self.assertEqual(rec.metadata["method"], "GET")
         self.assertIn("Testing", rec.metadata["tags"])
         self.assertEqual(rec.relationships[0]["target_id"], "Testing")
+
+    def test_parse_openapi_yaml(self):
+        yaml_content = """
+openapi: 3.0.0
+info:
+  title: Sample YAML API
+  version: 1.0.0
+paths:
+  /api/v1/status:
+    get:
+      summary: Get system health
+      description: Returns health status
+      tags:
+        - Health
+      responses:
+        '200':
+          description: OK
+"""
+        from knowledge_assistant.swagger_fetcher import load_spec_from_string_or_bytes
+        spec_dict = load_spec_from_string_or_bytes(yaml_content)
+        self.assertIsNotNone(spec_dict)
+        self.assertEqual(spec_dict["info"]["title"], "Sample YAML API")
+        records = parse_openapi_spec(spec_dict, project_id="yaml-proj")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].source_id, "GET /api/v1/status")
+        self.assertIn("Health", records[0].metadata["tags"])
+

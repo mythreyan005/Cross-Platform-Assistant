@@ -122,3 +122,40 @@ class KnowledgeGraphTests(TestCase):
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+    def test_edge_provenance_preservation(self):
+        commit_rec = SourceRecord(
+            source_type=SourceType.GITHUB,
+            source_id="abc9988",
+            project_id="test/sample-repo",
+            title="Fix networking bug",
+            content="Linked to TRNSPRTPCE-10",
+            relationships=[{
+                "target_type": "jira",
+                "target_id": "TRNSPRTPCE-10",
+                "relationship": "REFERENCES_ISSUE",
+                "provenance": "explicit_git_commit"
+            }]
+        )
+        self.kg.add_commit_record(commit_rec)
+        node_id = self.kg._commit_node_id("abc9988")
+        nodes, edges = self.kg.get_related_entities(node_id, max_depth=1)
+        self.assertTrue(any(e.get("provenance") == "explicit_git_commit" for e in edges))
+
+    def test_canonical_sha_handling(self):
+        full_sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+        short_sha = "a1b2c3d"
+        commit_rec = SourceRecord(
+            source_type=SourceType.GITHUB,
+            source_id=full_sha,
+            project_id="test/sample-repo",
+            title="Refactor core module",
+            content="Cleanup code",
+        )
+        self.kg.add_commit_record(commit_rec)
+
+        # Both full sha and short sha should be located by find_node
+        node_from_full = self.kg.find_node(full_sha)
+        node_from_short = self.kg.find_node(short_sha)
+        self.assertIsNotNone(node_from_full)
+        self.assertEqual(node_from_full, node_from_short)

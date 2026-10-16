@@ -1,7 +1,8 @@
 """
 Software Engineering Knowledge Graph (NetworkX MultiDiGraph).
-Provides genuine graph construction, persistence, incremental updates,
-and bounded relationship traversal across GitHub, Jira, and OpenAPI data.
+Provides canonical node representation, provenance tracking on all edges,
+persistence, incremental updates, and bounded relationship traversal across
+GitHub commits, Jira issues, and OpenAPI specifications.
 """
 
 import os
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 class SoftwareKnowledgeGraph:
     """
     Genuine Knowledge Graph representing software engineering artifacts and their relationships.
-    Built on NetworkX with project-level isolation and JSON persistence.
+    Built on NetworkX with project-level isolation, provenance tracking, and JSON persistence.
     """
 
     def __init__(self, project_id: str):
@@ -34,24 +35,25 @@ class SoftwareKnowledgeGraph:
 
     @staticmethod
     def _commit_node_id(sha: str) -> str:
-        return f"commit:{sha[:7]}"
+        # Use full canonical SHA if >= 7 chars, lowercased to prevent collisions
+        clean_sha = sha.strip().lower()
+        return f"commit:{clean_sha}"
 
     @staticmethod
     def _issue_node_id(key: str) -> str:
-        return f"issue:{key.upper()}"
+        return f"issue:{key.strip().upper()}"
 
     @staticmethod
     def _endpoint_node_id(source_id: str) -> str:
-        # source_id format: "GET /api/users" or "/api/users"
         parts = source_id.strip().split()
         if len(parts) == 2:
             method, path = parts[0].upper(), parts[1]
             return f"endpoint:{method}:{path}"
-        return f"endpoint:{source_id}"
+        return f"endpoint:{source_id.strip()}"
 
     @staticmethod
     def _component_node_id(name: str) -> str:
-        return f"component:{name.lower()}"
+        return f"component:{name.strip().lower()}"
 
     def ensure_project_node(self, project_name: Optional[str] = None) -> str:
         """Ensures the central Project node exists."""
@@ -61,36 +63,46 @@ class SoftwareKnowledgeGraph:
                 node_id,
                 node_type=NodeType.PROJECT.value,
                 label=project_name or self.project_id,
-                project_id=self.project_id
+                project_id=self.project_id,
+                source_type="project_meta",
+                provenance="repository_definition"
             )
         return node_id
 
     def add_commit_record(self, record: SourceRecord) -> str:
-        """Adds a GitHub commit node and connects it to the project and any linked Jira issues."""
+        """Adds a GitHub commit node and connects it to the project, modified components, and linked Jira issues."""
         proj_id = self.ensure_project_node()
-        node_id = self._commit_node_id(record.source_id)
+        sha = record.metadata.get("sha", record.source_id).lower()
+        node_id = self._commit_node_id(sha)
 
         self.graph.add_node(
             node_id,
             node_type=NodeType.COMMIT.value,
-            label=f"Commit {record.source_id}",
-            sha=record.metadata.get("sha", record.source_id),
-            short_sha=record.source_id,
+            label=f"Commit {sha[:7]}",
+            sha=sha,
+            short_sha=sha[:7],
             author=record.author or "Unknown",
             title=record.title,
             message=record.content,
             timestamp=record.timestamp,
             url=record.url,
-            project_id=self.project_id
+            project_id=self.project_id,
+            source_type=SourceType.GITHUB.value,
+            provenance="github_api_commit"
         )
 
         # Commit BELONGS_TO Project
         self.add_edge_if_not_exists(
             node_id, proj_id,
-            relationship=RelationshipType.BELONGS_TO.value
+            relationship=RelationshipType.BELONGS_TO.value,
+            properties={
+                "provenance": "git_repository_origin",
+                "source_type": SourceType.GITHUB.value,
+                "timestamp": record.timestamp or ""
+            }
         )
 
-        # Process relationships extracted from commit (e.g. Jira issue keys)
+        # Process relationships extracted from commit
         for rel in record.relationships:
             target_type = rel.get("target_type")
             target_id = rel.get("target_id")
@@ -99,19 +111,35 @@ class SoftwareKnowledgeGraph:
             if target_type == "jira" and target_id:
                 issue_node_id = self._issue_node_id(target_id)
                 if not self.graph.has_node(issue_node_id):
-                    # Create placeholder issue node until Jira data arrives
+                    # Placeholder node for referenced issue not yet independently ingested
                     self.graph.add_node(
                         issue_node_id,
                         node_type=NodeType.ISSUE.value,
                         label=f"Issue {target_id.upper()}",
                         key=target_id.upper(),
                         project_id=self.project_id,
-                        status="Referenced"
+                        status="ReferencedInCommit",
+                        source_type=SourceType.JIRA.value,
+                        provenance="commit_message_reference"
                     )
-                    self.add_edge_if_not_exists(issue_node_id, proj_id, RelationshipType.BELONGS_TO.value)
+                    self.add_edge_if_not_exists(
+                        issue_node_id, proj_id,
+                        relationship=RelationshipType.BELONGS_TO.value,
+                        properties={"provenance": "derived_jira_project"}
+                    )
 
-                # Commit REFERENCES_ISSUE Issue
-                self.add_edge_if_not_exists(node_id, issue_node_id, relationship=rel_kind)
+                # Commit REFERENCES_ISSUE Issue (provenance: regex extraction from commit message)
+                self.add_edge_if_not_exists(
+                    node_id, issue_node_id,
+                    relationship=rel_kind,
+                    properties={
+                        "provenance": rel.get("provenance", "commit_message_regex"),
+                        "regex_pattern": r"\b[A-Z][A-Z0-9]+-[0-9]+\b",
+                        "commit_sha": sha[:7],
+                        "issue_key": target_id.upper(),
+                        "timestamp": record.timestamp or ""
+                    }
+                )
 
             elif target_type == "component" and target_id:
                 comp_node_id = self._component_node_id(target_id)
@@ -121,9 +149,19 @@ class SoftwareKnowledgeGraph:
                         node_type=NodeType.COMPONENT.value,
                         label=f"Component {target_id}",
                         name=target_id,
-                        project_id=self.project_id
+                        project_id=self.project_id,
+                        source_type="file_tree",
+                        provenance="file_path_hierarchy"
                     )
-                self.add_edge_if_not_exists(node_id, comp_node_id, relationship=RelationshipType.MODIFIES_COMPONENT.value)
+                self.add_edge_if_not_exists(
+                    node_id, comp_node_id,
+                    relationship=RelationshipType.MODIFIES_COMPONENT.value,
+                    properties={
+                        "provenance": rel.get("provenance", "commit_modified_files"),
+                        "component_name": target_id,
+                        "timestamp": record.timestamp or ""
+                    }
+                )
 
         return node_id
 
@@ -132,23 +170,28 @@ class SoftwareKnowledgeGraph:
         proj_id = self.ensure_project_node()
         node_id = self._issue_node_id(record.source_id)
 
-        # Update or add issue node
         self.graph.add_node(
             node_id,
             node_type=NodeType.ISSUE.value,
-            label=f"Issue {record.source_id}",
-            key=record.source_id,
+            label=f"Issue {record.source_id.upper()}",
+            key=record.source_id.upper(),
             summary=record.metadata.get("summary", record.title),
             status=record.status or "Open",
             priority=record.metadata.get("priority", "Normal"),
             issue_type=record.metadata.get("issue_type", "Issue"),
             description=record.content,
             url=record.url,
-            project_id=self.project_id
+            project_id=self.project_id,
+            source_type=SourceType.JIRA.value,
+            provenance="jira_rest_api"
         )
 
         # Issue BELONGS_TO Project
-        self.add_edge_if_not_exists(node_id, proj_id, relationship=RelationshipType.BELONGS_TO.value)
+        self.add_edge_if_not_exists(
+            node_id, proj_id,
+            relationship=RelationshipType.BELONGS_TO.value,
+            properties={"provenance": "jira_project_mapping"}
+        )
 
         # Process relationships
         for rel in record.relationships:
@@ -163,9 +206,14 @@ class SoftwareKnowledgeGraph:
                         node_type=NodeType.COMPONENT.value,
                         label=f"Component {target_id}",
                         name=target_id,
-                        project_id=self.project_id
+                        project_id=self.project_id,
+                        provenance="jira_component_field"
                     )
-                self.add_edge_if_not_exists(node_id, comp_node_id, relationship=RelationshipType.RELATED_TO.value)
+                self.add_edge_if_not_exists(
+                    node_id, comp_node_id,
+                    relationship=RelationshipType.RELATED_TO.value,
+                    properties={"provenance": "jira_issue_components"}
+                )
 
             elif target_type == "jira" and target_id:
                 other_issue_id = self._issue_node_id(target_id)
@@ -173,11 +221,17 @@ class SoftwareKnowledgeGraph:
                     self.graph.add_node(
                         other_issue_id,
                         node_type=NodeType.ISSUE.value,
-                        label=f"Issue {target_id}",
-                        key=target_id,
-                        project_id=self.project_id
+                        label=f"Issue {target_id.upper()}",
+                        key=target_id.upper(),
+                        project_id=self.project_id,
+                        status="LinkedIssue",
+                        provenance="jira_issue_link"
                     )
-                self.add_edge_if_not_exists(node_id, other_issue_id, relationship=RelationshipType.RELATED_TO.value)
+                self.add_edge_if_not_exists(
+                    node_id, other_issue_id,
+                    relationship=RelationshipType.RELATED_TO.value,
+                    properties={"provenance": "jira_issuelinks_field"}
+                )
 
         return node_id
 
@@ -186,7 +240,7 @@ class SoftwareKnowledgeGraph:
         proj_id = self.ensure_project_node()
         node_id = self._endpoint_node_id(record.source_id)
 
-        method = record.metadata.get("method", "GET")
+        method = record.metadata.get("method", "GET").upper()
         path = record.metadata.get("path", record.source_id)
         summary = record.metadata.get("summary", record.title)
 
@@ -200,11 +254,17 @@ class SoftwareKnowledgeGraph:
             tags=record.metadata.get("tags", []),
             description=record.content,
             url=record.url,
-            project_id=self.project_id
+            project_id=self.project_id,
+            source_type=SourceType.OPENAPI.value,
+            provenance="openapi_spec_definition"
         )
 
         # Project EXPOSES_ENDPOINT Endpoint
-        self.add_edge_if_not_exists(proj_id, node_id, relationship=RelationshipType.EXPOSES_ENDPOINT.value)
+        self.add_edge_if_not_exists(
+            proj_id, node_id,
+            relationship=RelationshipType.EXPOSES_ENDPOINT.value,
+            properties={"provenance": "openapi_specification"}
+        )
 
         # Connect tags to components
         for tag in record.metadata.get("tags", []):
@@ -215,9 +275,14 @@ class SoftwareKnowledgeGraph:
                     node_type=NodeType.COMPONENT.value,
                     label=f"Component {tag}",
                     name=tag,
-                    project_id=self.project_id
+                    project_id=self.project_id,
+                    provenance="openapi_tag"
                 )
-            self.add_edge_if_not_exists(node_id, comp_node_id, relationship=RelationshipType.RELATED_TO.value)
+            self.add_edge_if_not_exists(
+                node_id, comp_node_id,
+                relationship=RelationshipType.RELATED_TO.value,
+                properties={"provenance": "openapi_tag_mapping"}
+            )
 
         return node_id
 
@@ -229,10 +294,14 @@ class SoftwareKnowledgeGraph:
         properties: Optional[Dict[str, Any]] = None
     ) -> None:
         """Adds a directed edge between u and v if it does not already exist with the same relationship."""
+        if not self.graph.has_node(u) or not self.graph.has_node(v):
+            logger.warning(f"Skipping edge creation: node {u} or {v} does not exist in graph.")
+            return
+
         if self.graph.has_edge(u, v):
             for edge_data in self.graph.get_edge_data(u, v).values():
                 if edge_data.get("relationship") == relationship:
-                    return  # Already exists
+                    return  # Deduplicated
 
         props = properties or {}
         props["relationship"] = relationship
@@ -240,27 +309,36 @@ class SoftwareKnowledgeGraph:
 
     def find_node(self, identifier: str) -> Optional[str]:
         """
-        Fuzzy or exact lookup for node ID given a keyword, SHA, issue key, or path.
+        Fuzzy or exact lookup for node ID given a keyword, SHA, issue key, or endpoint path.
         """
         clean_id = identifier.strip()
 
-        # Try exact node IDs
+        # 1. Try exact node ID prefix construction
         for prefix in (self._issue_node_id, self._commit_node_id, self._endpoint_node_id, self._component_node_id):
             cand = prefix(clean_id)
             if self.graph.has_node(cand):
                 return cand
 
-        # Try case-insensitive attribute match
+        # 2. Try attribute-based matching
         clean_lower = clean_id.lower()
         for n, data in self.graph.nodes(data=True):
             if data.get("key", "").lower() == clean_lower:
                 return n
             if data.get("short_sha", "").lower() == clean_lower:
                 return n
+            if data.get("sha", "").lower() == clean_lower:
+                return n
             if data.get("name", "").lower() == clean_lower:
                 return n
             if data.get("path", "").lower() == clean_lower:
                 return n
+
+        # 3. Substring matching for component keywords
+        for n, data in self.graph.nodes(data=True):
+            if data.get("node_type") == NodeType.COMPONENT.value:
+                comp_name = data.get("name", "").lower()
+                if comp_name and (comp_name in clean_lower or clean_lower in comp_name):
+                    return n
 
         return None
 
@@ -271,8 +349,8 @@ class SoftwareKnowledgeGraph:
         max_nodes: int = 25
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Bounded BFS traversal to discover connected nodes and edges starting from node_id.
-        Returns (nodes_list, edges_list).
+        Bounded BFS traversal to discover connected nodes and edges with cycle detection.
+        Returns: (nodes_list, edges_list)
         """
         if not self.graph.has_node(node_id):
             return [], []
@@ -286,32 +364,32 @@ class SoftwareKnowledgeGraph:
             if depth >= max_depth:
                 continue
 
-            # Check outbound and inbound edges
+            # Forward edges
             for nbr in self.graph.successors(curr):
                 for k, edata in self.graph.get_edge_data(curr, nbr).items():
-                    rel = edata.get("relationship", "RELATED_TO")
                     discovered_edges.append({
                         "source": curr,
                         "target": nbr,
-                        "relationship": rel
+                        "relationship": edata.get("relationship", "RELATED_TO"),
+                        "provenance": edata.get("provenance", "inferred")
                     })
-                if nbr not in visited_nodes:
+                if nbr not in visited_nodes and len(visited_nodes) < max_nodes:
                     visited_nodes.add(nbr)
                     queue.append((nbr, depth + 1))
 
+            # Backward edges
             for nbr in self.graph.predecessors(curr):
                 for k, edata in self.graph.get_edge_data(nbr, curr).items():
-                    rel = edata.get("relationship", "RELATED_TO")
                     discovered_edges.append({
                         "source": nbr,
                         "target": curr,
-                        "relationship": rel
+                        "relationship": edata.get("relationship", "RELATED_TO"),
+                        "provenance": edata.get("provenance", "inferred")
                     })
-                if nbr not in visited_nodes:
+                if nbr not in visited_nodes and len(visited_nodes) < max_nodes:
                     visited_nodes.add(nbr)
                     queue.append((nbr, depth + 1))
 
-        # Format nodes
         nodes_result = []
         for n in visited_nodes:
             ndata = self.graph.nodes[n]
@@ -326,10 +404,10 @@ class SoftwareKnowledgeGraph:
 
     def format_graph_context(self, seed_entity_ids: List[str], max_depth: int = 2) -> str:
         """
-        Extracts subgraphs for seed entities and renders human-readable factual relational statements.
+        Extracts subgraphs for seed entities and renders human-readable factual relational statements with provenance.
         """
         all_nodes: Dict[str, Dict[str, Any]] = {}
-        all_edges: Set[Tuple[str, str, str]] = set()
+        all_edges: Set[Tuple[str, str, str, str]] = set()
 
         for seed in seed_entity_ids:
             actual_node = self.find_node(seed)
@@ -340,22 +418,20 @@ class SoftwareKnowledgeGraph:
             for n in nodes:
                 all_nodes[n["id"]] = n
             for e in edges:
-                all_edges.add((e["source"], e["target"], e["relationship"]))
+                all_edges.add((e["source"], e["target"], e["relationship"], e.get("provenance", "ground_truth")))
 
         if not all_edges and not all_nodes:
             return ""
 
-        lines = ["=== KNOWLEDGE GRAPH RELATIONSHIPS (GROUND TRUTH) ==="]
+        lines = ["=== VERIFIED KNOWLEDGE GRAPH RELATIONSHIPS (PROVENANCE-BACKED) ==="]
 
-        # Format explicit edges as factual statements
-        for src, tgt, rel in sorted(list(all_edges)):
+        for src, tgt, rel, prov in sorted(list(all_edges)):
             src_node = all_nodes.get(src, self.graph.nodes.get(src, {}))
             tgt_node = all_nodes.get(tgt, self.graph.nodes.get(tgt, {}))
 
             src_label = src_node.get("label", src) if isinstance(src_node, dict) else src
             tgt_label = tgt_node.get("label", tgt) if isinstance(tgt_node, dict) else tgt
 
-            # Extra metadata context
             extra = []
             if isinstance(src_node, dict):
                 props = src_node.get("properties", src_node)
@@ -365,7 +441,7 @@ class SoftwareKnowledgeGraph:
                     extra.append(f"Status: {props['status']}")
             extra_str = f" ({', '.join(extra)})" if extra else ""
 
-            lines.append(f"• [{rel}] {src_label}{extra_str}  -->  {tgt_label}")
+            lines.append(f"• [{rel}] {src_label}{extra_str}  -->  {tgt_label}  [Provenance: {prov}]")
 
         return "\n".join(lines)
 

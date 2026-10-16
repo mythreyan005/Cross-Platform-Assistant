@@ -1,6 +1,7 @@
 """
 Swagger / OpenAPI Specification Fetcher for Cross-Platform Knowledge Assistant.
 Extracts API endpoints, HTTP methods, operation summaries, tags, and documentation.
+Supports both JSON and YAML OpenAPI specifications.
 """
 
 import os
@@ -8,6 +9,11 @@ import json
 import logging
 from typing import List, Optional, Dict, Any
 import requests
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 try:
     from .models_data import SourceRecord, SourceType
@@ -22,6 +28,10 @@ def parse_openapi_spec(spec_data: Dict[str, Any], project_id: str, base_url: str
     Parses an OpenAPI/Swagger dictionary and outputs unified SourceRecord items.
     """
     records: List[SourceRecord] = []
+    if not isinstance(spec_data, dict):
+        logger.warning(f"Malformed OpenAPI specification provided for {project_id}.")
+        return records
+
     paths = spec_data.get("paths", {})
     api_title = spec_data.get("info", {}).get("title", "API")
 
@@ -49,7 +59,7 @@ def parse_openapi_spec(spec_data: Dict[str, Any], project_id: str, base_url: str
                     params.append(f"{p['name']} ({p.get('in', 'query')})")
 
             # Extract response codes
-            responses = list(operation.get("responses", {}).keys())
+            responses = list(operation.get("responses", {}).keys()) if isinstance(operation.get("responses"), dict) else []
 
             relationships = []
             for tag in tags:
@@ -95,13 +105,26 @@ def parse_openapi_spec(spec_data: Dict[str, Any], project_id: str, base_url: str
     return records
 
 
+def load_spec_from_string_or_bytes(raw_content: str) -> Optional[Dict[str, Any]]:
+    """Tries JSON first, then falls back to YAML."""
+    try:
+        return json.loads(raw_content)
+    except Exception:
+        if yaml is not None:
+            try:
+                return yaml.safe_load(raw_content)
+            except Exception as ye:
+                logger.warning(f"Failed to parse OpenAPI as YAML: {ye}")
+    return None
+
+
 def fetch_openapi_records(
     source_url_or_path: str,
     project_id: str = "default",
     base_url: str = ""
 ) -> List[SourceRecord]:
     """
-    Loads OpenAPI / Swagger from a web URL or local JSON file and returns SourceRecords.
+    Loads OpenAPI / Swagger from a web URL or local JSON/YAML file and returns SourceRecords.
     """
     logger.info(f"Loading OpenAPI specification from: {source_url_or_path}...")
 
@@ -109,8 +132,12 @@ def fetch_openapi_records(
     if os.path.exists(source_url_or_path):
         try:
             with open(source_url_or_path, "r", encoding="utf-8") as f:
-                spec_data = json.load(f)
-                return parse_openapi_spec(spec_data, project_id, base_url)
+                content = f.read()
+                spec_data = load_spec_from_string_or_bytes(content)
+                if spec_data:
+                    return parse_openapi_spec(spec_data, project_id, base_url)
+                logger.error(f"Unrecognized OpenAPI format in {source_url_or_path}")
+                return []
         except Exception as e:
             logger.error(f"Failed to read local OpenAPI specification file: {e}")
             return []
@@ -121,10 +148,13 @@ def fetch_openapi_records(
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             response = requests.get(source_url_or_path, headers=headers, timeout=12)
             response.raise_for_status()
-            spec_data = response.json()
-            return parse_openapi_spec(spec_data, project_id, base_url)
+            spec_data = load_spec_from_string_or_bytes(response.text)
+            if spec_data:
+                return parse_openapi_spec(spec_data, project_id, base_url)
+            logger.warning(f"Could not parse remote OpenAPI content from {source_url_or_path}")
+            return []
         except Exception as e:
-            logger.warning(f"Failed to fetch remote OpenAPI JSON from {source_url_or_path}: {e}")
+            logger.warning(f"Failed to fetch remote OpenAPI JSON/YAML from {source_url_or_path}: {e}")
             return []
 
     logger.warning(f"OpenAPI source neither exists locally nor is a valid URL: {source_url_or_path}")
@@ -144,11 +174,3 @@ def fetch_swagger_docs(swagger_url: str) -> List[Dict[str, Any]]:
             'description': r.content
         })
     return legacy
-
-
-if __name__ == "__main__":
-    test_url = "https://petstore.swagger.io/v2/swagger.json"
-    recs = fetch_openapi_records(test_url, project_id="petstore")
-    print(f"Fetched {len(recs)} endpoints from Petstore.")
-    for r in recs[:3]:
-        print(f"- {r.source_id} : {r.title}")
