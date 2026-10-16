@@ -179,46 +179,96 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
     new_chunk_ids = [cid for cid, _ in chunked_pairs]
     docs = [d for _, d in chunked_pairs]
 
-    # 5. Synchronize ChromaDB: safe update strategy
-    # First, stage/upsert all new documents. Only if that succeeds without error,
-    # prune obsolete IDs so a failure never leaves Chroma stripped of prior data.
+    manifest_path = config.get("manifest_file") or str(BASE_DIR / f"index_manifest_{config['slug']}.json")
+    graph_path = config["graph_file"]
+    backup_graph_path = graph_path + ".bak"
+
+    def write_manifest_status(status_str: str, error_msg: Optional[str] = None):
+        try:
+            m_obj = {
+                "project": config["name"],
+                "repo": repo_key,
+                "index_version": "2.1",
+                "indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": status_str,
+                "error": error_msg or ""
+            }
+            with open(manifest_path, "w", encoding="utf-8") as f_m:
+                json.dump(m_obj, f_m, indent=2)
+        except Exception as me:
+            logger.warning(f"Failed to write manifest status {status_str}: {me}")
+
+    # Mark manifest as in-progress
+    write_manifest_status("INDEXING")
+
+    # If existing graph exists, backup for recovery
+    if os.path.exists(graph_path):
+        try:
+            import shutil
+            shutil.copyfile(graph_path, backup_graph_path)
+        except Exception as be:
+            logger.warning(f"Failed to create graph backup: {be}")
+
+    # Stage 1: Vector Store Insertion
     try:
         if docs:
             vector_store.add_documents(documents=docs, ids=new_chunk_ids)
-            print(f"Successfully indexed {len(docs)} chunks into ChromaDB.")
+            print(f"Successfully staged {len(docs)} chunks into ChromaDB.")
+    except Exception as e:
+        logger.error(f"Stage 1 Failure (Vector Insertion): {e}", exc_info=True)
+        write_manifest_status("FAILED_VECTOR_INSERTION", str(e))
+        raise RuntimeError(f"Vector store indexing failed at Stage 1: {e}") from e
 
+    # Stage 2: Obsolete Vector Chunk Pruning
+    try:
         existing_data = vector_store.get()
         existing_ids = set(existing_data.get("ids", []))
         obsolete_ids = existing_ids - set(new_chunk_ids)
-
         if obsolete_ids:
             print(f"Pruning {len(obsolete_ids)} obsolete vector chunks from ChromaDB...")
             vector_store.delete(ids=list(obsolete_ids))
     except Exception as e:
-        logger.error(f"Critical error during vector store update: {e}", exc_info=True)
-        # CRITICAL: Do NOT persist new graph or manifest if vector store fails, to prevent state inconsistency!
-        raise RuntimeError(f"Vector store indexing failed: {e}") from e
+        logger.error(f"Stage 2 Failure (Vector Pruning): {e}", exc_info=True)
+        write_manifest_status("FAILED_VECTOR_PRUNING", str(e))
+        raise RuntimeError(f"Vector pruning failed at Stage 2: {e}") from e
 
-    # 6. Atomic consistency: Only persist Knowledge Graph and Manifest after vector store successfully updates
-    new_kg.save_to_file(config["graph_file"])
-    stats = new_kg.get_stats()
-    print(f"Saved Knowledge Graph with {stats['total_nodes']} nodes and {stats['total_edges']} edges.\n")
+    # Stage 3: Knowledge Graph Serialization
+    try:
+        new_kg.save_to_file(graph_path)
+        stats = new_kg.get_stats()
+        print(f"Saved Knowledge Graph with {stats['total_nodes']} nodes and {stats['total_edges']} edges.\n")
+    except Exception as e:
+        logger.error(f"Stage 3 Failure (Graph Persistence): {e}", exc_info=True)
+        if os.path.exists(backup_graph_path):
+            try:
+                import shutil
+                shutil.copyfile(backup_graph_path, graph_path)
+                logger.info("Restored prior knowledge graph from backup.")
+            except Exception:
+                pass
+        write_manifest_status("FAILED_GRAPH_PERSISTENCE", str(e))
+        raise RuntimeError(f"Knowledge graph persistence failed at Stage 3: {e}") from e
 
-    manifest_data = {
-        "project": config["name"],
-        "repo": repo_key,
-        "index_version": "2.1",
-        "indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "status": "READY",
-        "jira_issues": len(jira_records),
-        "github_commits": len(github_records),
-        "openapi_endpoints": len(openapi_records),
-        "vector_chunks": len(chunked_pairs),
-        "graph_stats": stats
-    }
-    manifest_path = config.get("manifest_file") or str(BASE_DIR / f"index_manifest_{config['slug']}.json")
-    with open(manifest_path, "w", encoding="utf-8") as mf:
-        json.dump(manifest_data, mf, indent=2)
+    # Stage 4: Manifest Commit
+    try:
+        manifest_data = {
+            "project": config["name"],
+            "repo": repo_key,
+            "index_version": "2.1",
+            "indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "READY",
+            "jira_issues": len(jira_records),
+            "github_commits": len(github_records),
+            "openapi_endpoints": len(openapi_records),
+            "vector_chunks": len(chunked_pairs),
+            "graph_stats": stats
+        }
+        with open(manifest_path, "w", encoding="utf-8") as mf:
+            json.dump(manifest_data, mf, indent=2)
+    except Exception as e:
+        logger.error(f"Stage 4 Failure (Manifest Commit): {e}", exc_info=True)
+        write_manifest_status("FAILED_MANIFEST_COMMIT", str(e))
+        raise RuntimeError(f"Manifest commit failed at Stage 4: {e}") from e
 
     return {
         "project": config["name"],
@@ -234,7 +284,12 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
 def check_index_freshness(repo_key: str, max_age_seconds: Optional[int] = None) -> Dict[str, Any]:
     """
     Validates whether the index files (ChromaDB, Knowledge Graph, Manifest)
-    are present, consistent, and within freshness bounds.
+    are present, structurally intact, and synchronized.
+    Checks:
+    1. File existence (Chroma directory, Knowledge Graph, Manifest).
+    2. Manifest state: status == 'READY', index_version == '2.1'.
+    3. Graph structural integrity: valid JSON, contains nodes > 0.
+    4. Vector store structural integrity: Chroma collection exists and has chunks > 0.
     """
     config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
     chroma_dir = config["chroma_dir"]
@@ -242,6 +297,9 @@ def check_index_freshness(repo_key: str, max_age_seconds: Optional[int] = None) 
     manifest_file = config.get("manifest_file") or str(BASE_DIR / f"index_manifest_{config['slug']}.json")
 
     issues = []
+    manifest_data = {}
+
+    # 1. Physical presence
     if not os.path.exists(chroma_dir):
         issues.append("ChromaDB directory missing")
     if not os.path.exists(graph_file):
@@ -251,20 +309,41 @@ def check_index_freshness(repo_key: str, max_age_seconds: Optional[int] = None) 
     else:
         try:
             with open(manifest_file, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-            if manifest.get("status") != "READY":
-                issues.append(f"Index status is '{manifest.get('status')}' (not READY)")
-            if manifest.get("index_version") != "2.1":
-                issues.append(f"Index version '{manifest.get('index_version')}' is incompatible with required '2.1'")
+                manifest_data = json.load(f)
+            if manifest_data.get("status") != "READY":
+                issues.append(f"Index status is '{manifest_data.get('status')}' (not READY)")
+            if manifest_data.get("index_version") != "2.1":
+                issues.append(f"Index version '{manifest_data.get('index_version')}' is incompatible with required '2.1'")
         except Exception as e:
             issues.append(f"Manifest unreadable: {e}")
+
+    # 2. Structural integrity checks
+    if os.path.exists(graph_file):
+        try:
+            with open(graph_file, "r", encoding="utf-8") as gf:
+                g_json = json.load(gf)
+            nodes = g_json.get("nodes", [])
+            if not nodes:
+                issues.append("Knowledge Graph has zero nodes")
+        except Exception as ge:
+            issues.append(f"Knowledge Graph corrupted: {ge}")
+
+    if os.path.exists(chroma_dir):
+        try:
+            vs = get_vector_store(repo_key)
+            v_count = vs._collection.count()
+            if v_count == 0:
+                issues.append("ChromaDB vector collection is empty (0 chunks)")
+        except Exception as ve:
+            issues.append(f"ChromaDB inaccessible: {ve}")
 
     is_fresh = len(issues) == 0
     return {
         "repo": repo_key,
         "is_fresh": is_fresh,
         "issues": issues,
-        "manifest_path": manifest_file
+        "manifest_path": manifest_file,
+        "manifest_data": manifest_data
     }
 
 

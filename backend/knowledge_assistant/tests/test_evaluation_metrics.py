@@ -198,6 +198,33 @@ class EvaluationMetricsTests(TestCase):
         self.assertEqual(res["score"], 0.0)
         self.assertEqual(res["supported_claims"], 0)
         self.assertEqual(res["unsupported_claims"], 1)
+        self.assertNotIn("contradicted_claims", res)
+        self.assertEqual(res["method"], "lexical_and_entity_overlap_heuristic")
+
+    def test_evaluate_groundedness_empty_evidence_corpus(self):
+        # Empty evidence must result in 0.0 groundedness and all claims unsupported
+        answer = "The authentication service verifies user credentials against database."
+        res = evaluate_groundedness(answer, [], [], evidence_texts=[], status="SUCCESS")
+        self.assertEqual(res["score"], 0.0)
+        self.assertEqual(res["total_claims"], 1)
+        self.assertEqual(res["supported_claims"], 0)
+        self.assertEqual(res["unsupported_claims"], 1)
+
+    def test_evaluate_groundedness_partial_claim_support(self):
+        retrieved_sources = ["TRNSPRTPCE-980"]
+        evidence_texts = ["Jira ticket TRNSPRTPCE-980 resolves topology link calculations."]
+
+        # Sentence 1: Supported entity TRNSPRTPCE-980
+        # Sentence 2: Unsupported entity FAKE-1234
+        answer = (
+            "TRNSPRTPCE-980 resolves topology link calculation issues in TransportPCE. "
+            "However ticket FAKE-1234 is also modified in this release."
+        )
+        res = evaluate_groundedness(answer, retrieved_sources, [], evidence_texts, status="SUCCESS")
+        self.assertEqual(res["total_claims"], 2)
+        self.assertEqual(res["supported_claims"], 1)
+        self.assertEqual(res["unsupported_claims"], 1)
+        self.assertEqual(res["score"], 0.5)
 
     def test_evaluate_groundedness_no_technical_identifiers(self):
         evidence_texts = [

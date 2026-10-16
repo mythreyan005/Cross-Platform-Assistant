@@ -1,0 +1,35 @@
+{
+  "project_id": "opendaylight/transportpce",
+  "nodes": [
+    {
+      "id": "project:opendaylight/transportpce",
+      "node_type": "project",
+      "label": "TransportPCE (OpenDaylight)",
+      "project_id": "opendaylight/transportpce",
+      "source_type": "project_meta",
+      "provenance": "repository_definition"
+    },
+    {
+      "id": "endpoint:GET:/api/test",
+      "node_type": "endpoint",
+      "label": "GET /api/test",
+      "method": "GET",
+      "path": "/api/test",
+      "summary": "Test",
+      "tags": [],
+      "description": "Endpoint",
+      "url": null,
+      "project_id": "opendaylight/transportpce",
+      "source_type": "openapi",
+      "provenance": "openapi_spec_definition"
+    }
+  ],
+  "edges": [
+    {
+      "source": "project:opendaylight/transportpce",
+      "target": "endpoint:GET:/api/test",
+      "provenance": "openapi_specification",
+      "relationship": "EXPOSES_ENDPOINT"
+    }
+  ]
+}

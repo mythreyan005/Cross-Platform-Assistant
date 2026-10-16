@@ -86,7 +86,7 @@ The Knowledge Graph is modeled as a directed multi-graph $\mathcal{G} = (\mathca
 | :--- | :--- | :--- | :--- |
 | `project` | `project:{project_id}` | `project:opendaylight/transportpce` | Root project namespace |
 | `issue` | `issue:{KEY}` | `issue:TRNSPRTPCE-980` | Jira issue tracking entity |
-| `commit` | `commit:{sha[:7]}` | `commit:de74a89` | Git commit revision |
+| `commit` | `commit:{full_sha}` | `commit:de74a89104c8f5531d0617300c144e5b61b7fcf7` | Git commit revision (canonical 40-char SHA; short SHA used for display) |
 | `endpoint`| `endpoint:{METHOD}:{path}`| `endpoint:GET:/api/dataValueSets` | OpenAPI REST operation |
 | `component`| `component:{name}` | `component:tapi` | Architectural subsystem or tag |
 
@@ -138,10 +138,10 @@ These triples are prepended to the retrieved textual passages $\mathcal{D}_{\tex
 
 The codebase is hardened according to secure software engineering best practices:
 1. **Zero Hardcoded Secrets**: All Git and Jira API tokens, Groq keys, and Django secrets are isolated in `.env`.
-2. **Credential Redaction & Rotation**: `.gitignore` comprehensively excludes environment configurations, SQLite databases, and local Chroma vector databases. All API keys (Groq, GitHub, Jira) must be rotated periodically and immediately revoked if exposed. Production deployments must provide a cryptographically secure `DJANGO_SECRET_KEY` via environment variable.
+2. **Credential Redaction & Rotation**: `.gitignore` comprehensively excludes environment configurations, SQLite databases, and local Chroma vector databases. All API keys (Groq, GitHub, Jira) must be rotated periodically and immediately revoked if exposed. Production deployments must provide a cryptographically secure `DJANGO_SECRET_KEY` via environment variable. *Git History Security Notice*: Any legacy credentials committed in historical git commits (e.g., historical commit `59ad9bb1`) must be revoked and rotated immediately at the provider, and cleaned using `git-filter-repo` before publishing publicly.
 3. **Hardened Production Defaults**: `DEBUG=False` by default in `settings.py`. Wildcard `ALLOWED_HOSTS` and open `CORS_ALLOW_ALL_ORIGINS` are explicitly rejected when `DEBUG=False`. Internal stack traces are sanitized across all API error responses.
 4. **DRF Token Authentication & Scoped Throttling**: Write and administrative endpoints (`/api/reindex/`, `/api/auth/logout/`) require Bearer/Token authentication (`TokenAuthentication`). Reindexing operations are rate-limited via `ScopedRateThrottle` (`throttle_scope = 'indexing'`, capped at 5/hour). General endpoints are guarded by `AnonRateThrottle` (60/min) and `UserRateThrottle` (120/min).
-5. **Zero Fabrication Principle & Consistency**: Dynamic runtime endpoints (`/api/status/`) report real database node counts, edge counts, and sync statuses. Vector store chunk pruning and graph persistence are atomic, ensuring vector-graph state consistency even during ingestion failures.
+5. **Zero Fabrication Principle & Staged Persistence**: Dynamic runtime endpoints (`/api/status/`) report real database node counts, edge counts, and sync statuses. To prevent corrupted or incompatible stores during reindexing without claiming distributed ACID transactions, the indexing pipeline enforces a 4-stage sequential persistence workflow (vector insertion -> vector pruning -> atomic graph file serialization with `.bak` rollback recovery -> manifest commit). Deep structural freshness validation verifies JSON parse validity, non-empty node counts, Chroma collection counts, and manifest schema version 2.1.
 
 ---
 
@@ -211,13 +211,13 @@ M:\Project_Team09\
 │       ├── auth_views.py                   # User Registration & Token Auth Views
 │       ├── urls.py                         # Backend API URL Routing Configuration
 │       ├── settings.py                     # Hardened Django Production Settings
-│       └── tests\                          # Comprehensive Automated Test Suite (37 Tests)
+│       └── tests\                          # Comprehensive Automated Test Suite (46 Tests)
 │           ├── test_models_and_processor.py# Unit tests for chunking & identifiers
 │           ├── test_fetchers.py            # Unit tests for GitHub/Jira/YAML OpenAPI
 │           ├── test_knowledge_graph.py     # Unit tests for Graph, Provenance & SHA
 │           ├── test_auth_and_api.py        # Integration tests for DRF Auth & APIs
 │           ├── test_evaluation_metrics.py  # Unit tests for strict ID matching, Recall@k & Groundedness
-│           └── test_indexing_and_graph.py  # Unit tests for bounded BFS, pruning & atomic indexing
+│           └── test_indexing_and_graph.py  # Unit tests for bounded BFS, staged persistence, failure injection & freshness
 └── frontend\
     ├── package.json                        # Node Dependencies & Build Scripts
     ├── src\
@@ -277,15 +277,15 @@ M:\Project_Team09\
 
 ## 9. Automated Testing & Verification
 
-### 9.1 Run Backend Test Suite (37 Tests)
-Execute all unit and integration tests across data models, document chunking, fetchers (including YAML OpenAPI), graph persistence, canonical SHA lookup, edge provenance preservation, authentication, REST APIs, strict evaluation metric normalization, and atomic indexing consistency:
+### 9.1 Run Backend Test Suite (46 Tests)
+Execute all unit and integration tests across data models, document chunking, fetchers (including YAML OpenAPI), graph persistence, canonical SHA lookup, edge provenance preservation, authentication, REST APIs, strict evaluation metric normalization, staged persistence failure handling, and structural freshness validation:
 ```bash
 cd backend
 .\venv\Scripts\python.exe manage.py test knowledge_assistant.tests
 ```
 **Expected Output:**
 ```
-Ran 37 tests in ~14s
+Ran 46 tests in ~14s
 OK
 ```
 

@@ -205,11 +205,87 @@ class IndexingAndGraphTests(TestCase):
         # Confirm delete was never called since add_documents failed
         mock_vs.delete.assert_not_called()
 
-    def test_check_index_freshness(self):
-        """Tests index freshness check detects missing files or invalid manifest."""
+    @patch("knowledge_assistant.rag_pipeline.fetch_openapi_records")
+    @patch("knowledge_assistant.rag_pipeline.fetch_github_records")
+    @patch("knowledge_assistant.rag_pipeline.fetch_jira_records")
+    @patch("knowledge_assistant.rag_pipeline.get_vector_store")
+    def test_stage2_prune_failure_aborts_pipeline(self, mock_get_vs, mock_jira, mock_gh, mock_oas):
+        """Simulates Stage 2 failure (vector prune) and verifies graph/manifest are not committed as READY."""
+        mock_vs = MagicMock()
+        mock_vs.get.return_value = {"ids": ["obsolete_chunk"]}
+        mock_vs.delete.side_effect = RuntimeError("Delete error in Chroma")
+        mock_get_vs.return_value = mock_vs
+        mock_jira.return_value = []
+        mock_gh.return_value = []
+        mock_oas.return_value = [
+            SourceRecord(
+                source_type=SourceType.OPENAPI,
+                source_id="GET /api/test",
+                project_id="test/repo",
+                title="Test",
+                content="Endpoint",
+                metadata={"method": "GET", "path": "/api/test", "tags": []}
+            )
+        ]
+
         with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_file = os.path.join(tmp_dir, "manifest.json")
+            with patch.dict(PROJECT_CONFIGS["opendaylight/transportpce"], {"manifest_file": manifest_file}):
+                with self.assertRaises(RuntimeError) as ctx:
+                    load_and_index_data(repo="opendaylight/transportpce", max_commits=1, max_issues=1)
+                self.assertIn("Vector pruning failed at Stage 2", str(ctx.exception))
+
+                # Verify manifest was flagged with failure status, NOT READY
+                with open(manifest_file, "r") as mf:
+                    m = json.load(mf)
+                self.assertEqual(m["status"], "FAILED_VECTOR_PRUNING")
+
+    @patch("knowledge_assistant.rag_pipeline.SoftwareKnowledgeGraph.save_to_file")
+    @patch("knowledge_assistant.rag_pipeline.fetch_openapi_records")
+    @patch("knowledge_assistant.rag_pipeline.fetch_github_records")
+    @patch("knowledge_assistant.rag_pipeline.fetch_jira_records")
+    @patch("knowledge_assistant.rag_pipeline.get_vector_store")
+    def test_stage3_graph_persistence_failure_aborts_pipeline(self, mock_get_vs, mock_jira, mock_gh, mock_oas, mock_save):
+        """Simulates Stage 3 failure (graph save) and verifies manifest is flagged as failed."""
+        mock_vs = MagicMock()
+        mock_vs.get.return_value = {"ids": []}
+        mock_get_vs.return_value = mock_vs
+        mock_jira.return_value = []
+        mock_gh.return_value = []
+        mock_oas.return_value = [
+            SourceRecord(
+                source_type=SourceType.OPENAPI,
+                source_id="GET /api/test",
+                project_id="test/repo",
+                title="Test",
+                content="Endpoint",
+                metadata={"method": "GET", "path": "/api/test", "tags": []}
+            )
+        ]
+        mock_save.side_effect = IOError("Disk full writing knowledge graph")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_file = os.path.join(tmp_dir, "manifest.json")
+            with patch.dict(PROJECT_CONFIGS["opendaylight/transportpce"], {"manifest_file": manifest_file}):
+                with self.assertRaises(RuntimeError) as ctx:
+                    load_and_index_data(repo="opendaylight/transportpce", max_commits=1, max_issues=1)
+                self.assertIn("Knowledge graph persistence failed at Stage 3", str(ctx.exception))
+
+                with open(manifest_file, "r") as mf:
+                    m = json.load(mf)
+                self.assertEqual(m["status"], "FAILED_GRAPH_PERSISTENCE")
+
+    @patch("knowledge_assistant.rag_pipeline.get_vector_store")
+    def test_check_index_freshness_deep_validation(self, mock_get_vs):
+        """Tests index freshness check detects corrupt JSON, zero nodes, and missing manifest."""
+        mock_vs = MagicMock()
+        mock_vs._collection.count.return_value = 5
+        mock_get_vs.return_value = mock_vs
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             manifest_file = os.path.join(tmp_dir, "test_manifest.json")
-            # Create a valid manifest
+            graph_file = os.path.join(tmp_dir, "graph.json")
+
             m_data = {
                 "project": "Test Project",
                 "repo": "test/repo",
@@ -221,17 +297,32 @@ class IndexingAndGraphTests(TestCase):
 
             with patch.dict(PROJECT_CONFIGS["dhis2/dhis2-core"], {
                 "chroma_dir": tmp_dir,
-                "graph_file": os.path.join(tmp_dir, "graph.json"),
+                "graph_file": graph_file,
                 "manifest_file": manifest_file
             }):
-                # Missing graph file
+                # 1. Missing graph file
                 freshness = check_index_freshness("dhis2/dhis2-core")
                 self.assertFalse(freshness["is_fresh"])
                 self.assertIn("Knowledge Graph JSON missing", freshness["issues"])
 
-                # Create graph file
-                with open(os.path.join(tmp_dir, "graph.json"), "w") as f:
-                    f.write("{}")
+                # 2. Corrupt / empty JSON graph file
+                with open(graph_file, "w") as f:
+                    f.write("NOT_VALID_JSON{{{")
+                freshness_corrupt = check_index_freshness("dhis2/dhis2-core")
+                self.assertFalse(freshness_corrupt["is_fresh"])
+                self.assertTrue(any("corrupted" in iss.lower() for iss in freshness_corrupt["issues"]))
 
-                freshness_now = check_index_freshness("dhis2/dhis2-core")
-                self.assertTrue(freshness_now["is_fresh"])
+                # 3. Valid JSON with zero nodes
+                with open(graph_file, "w") as f:
+                    json.dump({"nodes": []}, f)
+                freshness_zero = check_index_freshness("dhis2/dhis2-core")
+                self.assertFalse(freshness_zero["is_fresh"])
+                self.assertIn("Knowledge Graph has zero nodes", freshness_zero["issues"])
+
+                # 4. Valid graph with nodes and valid vector store
+                with open(graph_file, "w") as f:
+                    json.dump({"nodes": [{"id": "node-1"}]}, f)
+
+                freshness_valid = check_index_freshness("dhis2/dhis2-core")
+                self.assertTrue(freshness_valid["is_fresh"])
+                self.assertEqual(freshness_valid["issues"], [])

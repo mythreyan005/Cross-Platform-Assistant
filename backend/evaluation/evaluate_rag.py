@@ -325,10 +325,16 @@ def evaluate_groundedness(
     status: str = "SUCCESS"
 ) -> Dict[str, Any]:
     """
-    Evidence-based groundedness assessment.
-    Eliminates all hardcoded scores.
-    API failures and empty retrievals receive 0.0.
-    Extractive fallbacks and LLM answers are actively decomposed into claims and verified against evidence.
+    Evaluates answer groundedness using an automated lexical and entity-overlap heuristic.
+    
+    IMPORTANT METHODOLOGICAL LIMITATION:
+    This metric is an automated lexical proxy checking:
+    (1) Technical identifier resolution: whether Jira issue keys, commit SHAs, and REST endpoints
+        mentioned in answer claims resolve to retrieved source records or graph nodes/edges.
+    (2) Lexical token overlap: for claims without technical identifiers, computes content-token overlap
+        against retrieved document chunks (threshold >= 0.40).
+    It is NOT an NLI semantic entailment model and does NOT perform contradiction detection.
+    Contradiction detection is explicitly omitted rather than reported as zero.
     """
     if status in ("API_ERROR", "EMPTY_RETRIEVAL"):
         return {
@@ -336,9 +342,8 @@ def evaluate_groundedness(
             "total_claims": 0,
             "supported_claims": 0,
             "unsupported_claims": 0,
-            "contradicted_claims": 0,
-            "method": "automated_claim_verification",
-            "notes": f"Zero groundedness assigned due to status={status}."
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": f"Zero groundedness assigned because execution status is {status}."
         }
 
     if not answer_text or not answer_text.strip():
@@ -347,8 +352,7 @@ def evaluate_groundedness(
             "total_claims": 0,
             "supported_claims": 0,
             "unsupported_claims": 0,
-            "contradicted_claims": 0,
-            "method": "automated_claim_verification",
+            "method": "lexical_and_entity_overlap_heuristic",
             "notes": "Empty answer text."
         }
 
@@ -367,9 +371,19 @@ def evaluate_groundedness(
             "total_claims": 0,
             "supported_claims": 0,
             "unsupported_claims": 0,
-            "contradicted_claims": 0,
-            "method": "automated_claim_verification",
+            "method": "lexical_and_entity_overlap_heuristic",
             "notes": "No substantive claims extracted from answer."
+        }
+
+    # If evidence corpus is completely empty, all claims are unsupported
+    if not retrieved_source_ids and not graph_edges and not evidence_texts:
+        return {
+            "score": 0.0,
+            "total_claims": len(claims),
+            "supported_claims": 0,
+            "unsupported_claims": len(claims),
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Evidence corpus is empty; all claims marked unsupported."
         }
 
     # 2. Build canonical evidence pool
@@ -414,7 +428,7 @@ def evaluate_groundedness(
             else:
                 unsupported_count += 1
         else:
-            # Claim without technical identifiers: verify significant token overlap against evidence
+            # Claim without technical identifiers: lexical token overlap heuristic
             claim_tokens = [w.lower() for w in re.findall(r'\b[a-zA-Z]{4,}\b', claim)]
             if not claim_tokens:
                 unsupported_count += 1
@@ -432,8 +446,8 @@ def evaluate_groundedness(
         "total_claims": len(claims),
         "supported_claims": supported_count,
         "unsupported_claims": unsupported_count,
-        "contradicted_claims": 0,
-        "method": "automated_claim_verification"
+        "method": "lexical_and_entity_overlap_heuristic",
+        "notes": "Automated entity containment and lexical token overlap heuristic."
     }
 
 
@@ -587,6 +601,9 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
     v_status_counts = {"SUCCESS": 0, "EXTRACTIVE_FALLBACK": 0, "EMPTY_RETRIEVAL": 0, "API_ERROR": 0}
     h_status_counts = {"SUCCESS": 0, "EXTRACTIVE_FALLBACK": 0, "EMPTY_RETRIEVAL": 0, "API_ERROR": 0}
 
+    v_statuses = []
+    h_statuses = []
+
     for item in EVALUATION_DATASET:
         qid = item["id"]
         q = item["question"]
@@ -599,6 +616,7 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
         # 1. Vector-Only RAG (cutoff k=5)
         v_res = run_vector_only_rag(q, repo, groq_api_key, top_k=5)
         v_status_counts[v_res["status"]] = v_status_counts.get(v_res["status"], 0) + 1
+        v_statuses.append(v_res["status"])
         v_recall, v_prec, v_f1, v_matched = calculate_retrieval_metrics(exp_sources, v_res["retrieved_source_ids"], cutoff_k=5)
         v_rel_recall, _ = evaluate_relationship_recall(exp_edges, v_res["graph_edges"], edge_budget=30)
         v_ground_res = evaluate_groundedness(v_res["answer"], v_res["retrieved_source_ids"], v_res["graph_edges"], v_res["evidence_texts"], v_res["status"])
@@ -616,6 +634,7 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
         # 2. Hybrid Graph-RAG (FAIR COMPARISON: evaluated at cutoff k=5 for document level, plus context-wide recall)
         h_res = run_hybrid_graph_rag(q, repo, groq_api_key, top_k=5)
         h_status_counts[h_res["status"]] = h_status_counts.get(h_res["status"], 0) + 1
+        h_statuses.append(h_res["status"])
         h_recall_5, h_prec_5, h_f1_5, h_matched_5 = calculate_retrieval_metrics(exp_sources, h_res["retrieved_source_ids"], cutoff_k=5)
         h_exp_rec, h_exp_prec, h_exp_f1, h_exp_matched = calculate_retrieval_metrics(exp_sources, h_res["retrieved_source_ids"], cutoff_k=None)
         h_rel_recall, h_matched_edges = evaluate_relationship_recall(exp_edges, h_res["graph_edges"], edge_budget=30)
@@ -684,6 +703,9 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
         time.sleep(3.0)
 
     n = len(EVALUATION_DATASET)
+    v_succ_ground = [g for g, s in zip(v_groundedness, v_statuses) if s == "SUCCESS"]
+    h_succ_ground = [g for g, s in zip(h_groundedness, h_statuses) if s == "SUCCESS"]
+
     summary = {
         "benchmark_metadata": {
             "total_queries_evaluated": n,
@@ -698,25 +720,30 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
             }
         },
         "operational_reliability": {
+            "description": "System execution outcomes categorized by status type.",
             "vector_only": {
-                "success_count": v_status_counts["SUCCESS"],
-                "fallback_count": v_status_counts["EXTRACTIVE_FALLBACK"],
-                "empty_retrieval_count": v_status_counts["EMPTY_RETRIEVAL"],
-                "api_error_count": v_status_counts["API_ERROR"],
+                "total_queries": n,
+                "successful_runs": v_status_counts["SUCCESS"],
+                "fallback_runs": v_status_counts["EXTRACTIVE_FALLBACK"],
+                "empty_retrieval_runs": v_status_counts["EMPTY_RETRIEVAL"],
+                "api_error_runs": v_status_counts["API_ERROR"],
                 "success_rate": round(v_status_counts["SUCCESS"] / n, 4),
                 "failure_rate": round((v_status_counts["EMPTY_RETRIEVAL"] + v_status_counts["API_ERROR"]) / n, 4)
             },
             "hybrid_graph_rag": {
-                "success_count": h_status_counts["SUCCESS"],
-                "fallback_count": h_status_counts["EXTRACTIVE_FALLBACK"],
-                "empty_retrieval_count": h_status_counts["EMPTY_RETRIEVAL"],
-                "api_error_count": h_status_counts["API_ERROR"],
+                "total_queries": n,
+                "successful_runs": h_status_counts["SUCCESS"],
+                "fallback_runs": h_status_counts["EXTRACTIVE_FALLBACK"],
+                "empty_retrieval_runs": h_status_counts["EMPTY_RETRIEVAL"],
+                "api_error_runs": h_status_counts["API_ERROR"],
                 "success_rate": round(h_status_counts["SUCCESS"] / n, 4),
                 "failure_rate": round((h_status_counts["EMPTY_RETRIEVAL"] + h_status_counts["API_ERROR"]) / n, 4)
             }
         },
         "aggregate_metrics": {
             "retrieval_at_cutoff_k5": {
+                "description": "Document-level retrieval metrics evaluated strictly at cutoff k=5 unique source records.",
+                "denominator": f"total benchmark queries (N={n})",
                 "mean_recall_at_5": {
                     "vector_only": round(sum(v_recalls_at_5) / n, 4),
                     "hybrid_graph_rag": round(sum(h_recalls_at_5) / n, 4)
@@ -731,21 +758,51 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
                 }
             },
             "graph_relationship_reasoning": {
+                "description": "Relationship recall evaluated over structured graph edges under budget limit of 30 edges.",
+                "denominator": f"total benchmark queries (N={n})",
                 "relationship_recall_budget_30": {
                     "vector_only": round(sum(v_rel_recalls) / n, 4),
                     "hybrid_graph_rag": round(sum(h_rel_recalls) / n, 4)
                 }
             },
             "expanded_context_retrieval": {
+                "description": "Recall across the full hybrid context pool (top-5 vector chunks + multi-seed graph expansion).",
+                "denominator": f"total benchmark queries (N={n})",
                 "hybrid_expanded_context_recall": round(sum(h_expanded_recalls) / n, 4)
             },
             "answer_groundedness": {
-                "mean_groundedness_score": {
-                    "vector_only": round(sum(v_groundedness) / n, 4),
-                    "hybrid_graph_rag": round(sum(h_groundedness) / n, 4)
+                "evaluation_method": "lexical_and_entity_overlap_heuristic",
+                "method_description": "Automated proxy checking technical identifier containment in retrieved context and lexical token overlap against evidence text. Does not detect semantic contradictions without an NLI model.",
+                "groundedness_successful_population": {
+                    "description": "Calculated strictly over answers with status == SUCCESS (excludes empty retrievals, fallbacks, and API errors).",
+                    "vector_only": {
+                        "mean_score": round(sum(v_succ_ground) / len(v_succ_ground), 4) if v_succ_ground else 0.0,
+                        "sample_size": len(v_succ_ground),
+                        "denominator": "count of successful queries (status=SUCCESS)"
+                    },
+                    "hybrid_graph_rag": {
+                        "mean_score": round(sum(h_succ_ground) / len(h_succ_ground), 4) if h_succ_ground else 0.0,
+                        "sample_size": len(h_succ_ground),
+                        "denominator": "count of successful queries (status=SUCCESS)"
+                    }
+                },
+                "groundedness_all_queries_population": {
+                    "description": "Calculated across all benchmark queries with empty retrievals and API failures scored as 0.0.",
+                    "vector_only": {
+                        "mean_score": round(sum(v_groundedness) / n, 4),
+                        "sample_size": n,
+                        "denominator": f"total benchmark queries (N={n})"
+                    },
+                    "hybrid_graph_rag": {
+                        "mean_score": round(sum(h_groundedness) / n, 4),
+                        "sample_size": n,
+                        "denominator": f"total benchmark queries (N={n})"
+                    }
                 }
             },
             "mean_latency_sec": {
+                "description": "Wall-clock execution time per query in seconds.",
+                "denominator": f"total benchmark queries (N={n})",
                 "vector_only": round(sum(v_latencies) / n, 3),
                 "hybrid_graph_rag": round(sum(h_latencies) / n, 3)
             }
@@ -762,7 +819,7 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
     print(f"Recall@5: Vector={summary['aggregate_metrics']['retrieval_at_cutoff_k5']['mean_recall_at_5']['vector_only']} | Hybrid={summary['aggregate_metrics']['retrieval_at_cutoff_k5']['mean_recall_at_5']['hybrid_graph_rag']}")
     print(f"Expanded Recall: Hybrid={summary['aggregate_metrics']['expanded_context_retrieval']['hybrid_expanded_context_recall']}")
     print(f"Relationship Recall (budget=30): Vector={summary['aggregate_metrics']['graph_relationship_reasoning']['relationship_recall_budget_30']['vector_only']} | Hybrid={summary['aggregate_metrics']['graph_relationship_reasoning']['relationship_recall_budget_30']['hybrid_graph_rag']}")
-    print(f"Groundedness: Vector={summary['aggregate_metrics']['answer_groundedness']['mean_groundedness_score']['vector_only']} | Hybrid={summary['aggregate_metrics']['answer_groundedness']['mean_groundedness_score']['hybrid_graph_rag']}")
+    print(f"Groundedness (Successful): Vector={summary['aggregate_metrics']['answer_groundedness']['groundedness_successful_population']['vector_only']['mean_score']} | Hybrid={summary['aggregate_metrics']['answer_groundedness']['groundedness_successful_population']['hybrid_graph_rag']['mean_score']}")
     print(f"Mean Latency: Vector={summary['aggregate_metrics']['mean_latency_sec']['vector_only']}s | Hybrid={summary['aggregate_metrics']['mean_latency_sec']['hybrid_graph_rag']}s")
     print(f"=======================================================\n")
     return summary
