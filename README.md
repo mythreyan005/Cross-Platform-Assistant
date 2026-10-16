@@ -160,23 +160,25 @@ The comparative evaluation framework (`backend/evaluation/evaluate_rag.py`) benc
 
 ### Benchmark Metrics (Dynamically Calculated)
 
-All evaluation metrics are calculated directly against ground-truth artifacts without hardcoded placeholders:
+All evaluation metrics are calculated dynamically against ground-truth artifacts with strict identifier normalization and explicit population denominators:
 
-- **Recall@k**: Fraction of relevant ground-truth artifacts present in retrieved context (retrieval cutoff $k=5$).
-- **Precision@k**: Fraction of retrieved entities matching ground-truth artifacts.
-- **Relationship Recall**: Verification that ground-truth cross-source multi-hop edges were discovered with exact edge types and supplied to the context.
-- **Groundedness Score**: Systematic assessment of whether factual claims and citations in generated answers are directly supported by retrieved evidence.
+- **Recall@5 & Precision@5**: Document-level retrieval evaluated at cutoff $k=5$ unique source records for both Vector-Only and Hybrid Graph-RAG to ensure strict baseline parity.
+- **Hybrid Expanded Context Recall**: Recall across the complete hybrid context pool (top-$k$ vector chunks plus multi-seed graph expansion).
+- **Relationship Recall**: Verification that ground-truth cross-source multi-hop edges were discovered with exact edge types under a budget of 30 edges.
+- **Groundedness Heuristic Score**: Automated lexical and identifier overlap heuristic assessing evidence support for generated claims (evaluated across the successful answer population).
+- **Operational Reliability**: Separate accounting of successful runs, extractive fallbacks, empty retrievals, and API rate-limit errors.
 - **Latency (s)**: Wall-clock execution time per query (including API rate-limit delays).
 
 #### Experimental Benchmark Results (6 Queries on TransportPCE & DHIS2)
 
-| Metric | Vector-Only RAG ($k=5$) | Hybrid Graph-RAG | Absolute / Relative Gain |
-| :--- | :---: | :---: | :---: |
-| **Mean Recall@k** | **0.5555** (55.55%) | **0.8333** (83.33%) | **+50.00% relative retrieval gain** |
-| **Relationship Recall** | **0.0000** (0.00%) | **1.0000** (100.00%) | **+100.00% structured relationship coverage** |
-| **Groundedness Score** | **0.2222** (22.22%) | **0.3370** (33.70%) | **+51.67% claim support increase** |
-| **Mean Precision@k** | 0.5139 | 0.0942 | Controlled tradeoff (multi-seed graph frontier expansion) |
-| **Mean Latency (s)** | 6.172s | 22.788s | Overhead due to subgraph extraction & token budget |
+| Metric | Vector-Only RAG ($k=5$) | Hybrid Graph-RAG ($k=5$) | Hybrid Expanded Pool | Notes / Analysis |
+| :--- | :---: | :---: | :---: | :--- |
+| **Mean Recall@k** | **0.5555** (55.55%) | **0.5555** (55.55%) | **0.6111** (61.11%) | +10.0% relative gain via multi-seed graph expansion |
+| **Mean Precision@k** | **0.5139** | **0.2861** | — | Frontier expansion prioritizes multi-hop relationship coverage |
+| **Relationship Recall** | **0.0000** (0.00%) | **0.5000** (50.00%) | **0.5000** (50.00%) | Vector baseline cannot discover structured multi-hop edges |
+| **Groundedness (Successful)** | **0.6713** (67.13%) | **0.1397** (13.97%) | — | Lexical overlap heuristic ($N=6$ successful runs each) |
+| **Operational Reliability** | 100% (6/6 Success) | 100% (6/6 Success) | 100% | 0 fallbacks, 0 empty retrievals, 0 API errors |
+| **Mean Latency (s)** | 5.845s | 15.051s | — | Additional BFS subgraph traversal and token payload |
 
 *The full evaluation report with granular per-query results is persisted to `backend/evaluation/evaluation_results.json`.*
 

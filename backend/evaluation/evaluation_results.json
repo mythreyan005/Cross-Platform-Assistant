@@ -1,32 +1,102 @@
 {
   "benchmark_metadata": {
     "total_queries_evaluated": 6,
-    "evaluation_date": "2026-10-16 19:00:22",
+    "evaluation_date": "2026-10-16 19:31:18",
     "groq_model": "qwen/qwen3.8-27b",
     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-    "document_retrieval_cutoff_k": 5
+    "document_retrieval_cutoff_k": 5,
+    "graph_traversal_limits": {
+      "max_depth": 2,
+      "max_nodes": 25,
+      "max_edges_budget": 30
+    }
+  },
+  "operational_reliability": {
+    "description": "System execution outcomes categorized by status type.",
+    "vector_only": {
+      "total_queries": 6,
+      "successful_runs": 6,
+      "fallback_runs": 0,
+      "empty_retrieval_runs": 0,
+      "api_error_runs": 0,
+      "success_rate": 1.0,
+      "failure_rate": 0.0
+    },
+    "hybrid_graph_rag": {
+      "total_queries": 6,
+      "successful_runs": 6,
+      "fallback_runs": 0,
+      "empty_retrieval_runs": 0,
+      "api_error_runs": 0,
+      "success_rate": 1.0,
+      "failure_rate": 0.0
+    }
   },
   "aggregate_metrics": {
-    "mean_recall": {
-      "vector_only_at_5": 0.5555,
-      "hybrid_graph_rag": 0.8333,
-      "relative_gain_percent": 50.0
+    "retrieval_at_cutoff_k5": {
+      "description": "Document-level retrieval metrics evaluated strictly at cutoff k=5 unique source records.",
+      "denominator": "total benchmark queries (N=6)",
+      "mean_recall_at_5": {
+        "vector_only": 0.5555,
+        "hybrid_graph_rag": 0.5555
+      },
+      "mean_precision_at_5": {
+        "vector_only": 0.5139,
+        "hybrid_graph_rag": 0.2861
+      },
+      "mean_f1_at_5": {
+        "vector_only": 0.5056,
+        "hybrid_graph_rag": 0.3651
+      }
     },
-    "mean_precision": {
-      "vector_only_at_5": 0.5139,
-      "hybrid_graph_rag": 0.0942
+    "graph_relationship_reasoning": {
+      "description": "Relationship recall evaluated over structured graph edges under budget limit of 30 edges.",
+      "denominator": "total benchmark queries (N=6)",
+      "relationship_recall_budget_30": {
+        "vector_only": 0.0,
+        "hybrid_graph_rag": 0.5
+      }
     },
-    "relationship_recall": {
-      "vector_only": 0.0,
-      "hybrid_graph_rag": 1.0
+    "expanded_context_retrieval": {
+      "description": "Recall across the full hybrid context pool (top-5 vector chunks + multi-seed graph expansion).",
+      "denominator": "total benchmark queries (N=6)",
+      "hybrid_expanded_context_recall": 0.6111
     },
-    "groundedness_score": {
-      "vector_only": 0.2222,
-      "hybrid_graph_rag": 0.337
+    "answer_groundedness": {
+      "evaluation_method": "lexical_and_entity_overlap_heuristic",
+      "method_description": "Automated proxy checking technical identifier containment in retrieved context and lexical token overlap against evidence text. Does not detect semantic contradictions without an NLI model.",
+      "groundedness_successful_population": {
+        "description": "Calculated strictly over answers with status == SUCCESS (excludes empty retrievals, fallbacks, and API errors).",
+        "vector_only": {
+          "mean_score": 0.6713,
+          "sample_size": 6,
+          "denominator": "count of successful queries (status=SUCCESS)"
+        },
+        "hybrid_graph_rag": {
+          "mean_score": 0.1397,
+          "sample_size": 6,
+          "denominator": "count of successful queries (status=SUCCESS)"
+        }
+      },
+      "groundedness_all_queries_population": {
+        "description": "Calculated across all benchmark queries with empty retrievals and API failures scored as 0.0.",
+        "vector_only": {
+          "mean_score": 0.6713,
+          "sample_size": 6,
+          "denominator": "total benchmark queries (N=6)"
+        },
+        "hybrid_graph_rag": {
+          "mean_score": 0.1397,
+          "sample_size": 6,
+          "denominator": "total benchmark queries (N=6)"
+        }
+      }
     },
     "mean_latency_sec": {
-      "vector_only": 6.172,
-      "hybrid_graph_rag": 22.788
+      "description": "Wall-clock execution time per query in seconds.",
+      "denominator": "total benchmark queries (N=6)",
+      "vector_only": 5.845,
+      "hybrid_graph_rag": 15.051
     }
   },
   "detailed_results": [
@@ -54,7 +124,7 @@
       ],
       "vector_only": {
         "status": "SUCCESS",
-        "latency_sec": 4.803,
+        "latency_sec": 2.283,
         "docs_count": 5,
         "retrieved_source_ids": [
           "TRNSPRTPCE-1003",
@@ -67,218 +137,58 @@
         "metrics": {
           "recall_at_5": 0.3333,
           "precision_at_5": 0.3333,
+          "f1_at_5": 0.3333,
           "relationship_recall": 0.0,
-          "groundedness": 0.0
+          "groundedness": 0.3333,
+          "groundedness_breakdown": {
+            "score": 0.3333,
+            "total_claims": 9,
+            "supported_claims": 3,
+            "unsupported_claims": 6,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided context, the GitHub commit linked to Jira issue **TRNSPRTPCE-980** is:\n\n*   **Change-Id:** `Ifd44fd48b8c4cdf3c0be63070ca5f7e17d72257c`\n*   **Signed-off-by:** Joakim T\u00f6rnqvist <joakim.tornqvist@smartoptics.com>\n*   **Modified Files:**\n    *   `tapi/src/main/java/org/opendaylight"
       },
       "hybrid_graph_rag": {
         "status": "SUCCESS",
-        "retrieval_mode": "hybrid_graph_rag",
-        "latency_sec": 2.618,
+        "retrieval_mode": "vector_only",
+        "latency_sec": 1.829,
         "docs_count": 5,
-        "graph_nodes_count": 19,
-        "graph_edges_count": 25,
+        "graph_nodes_count": 0,
+        "graph_edges_count": 0,
         "retrieved_source_ids": [
           "TRNSPRTPCE-1003",
           "unknown",
           "490a8fb",
-          "e10ac2a",
-          "commit:de74a89",
-          "issue:TRNSPRTPCE-1000",
-          "issue:TRNSPRTPCE-979",
-          "issue:TRNSPRTPCE-1003",
-          "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-          "endpoint:POST:/api/v1/service-path",
-          "issue:TRNSPRTPCE-996",
-          "issue:TRNSPRTPCE-980",
-          "commit:490a8fb",
-          "component:tapi",
-          "commit:2e7e995",
-          "commit:e10ac2a",
-          "endpoint:GET:/restconf/config/ietf-network:networks",
-          "commit:41d02f0",
-          "issue:TRNSPRTPCE-999",
-          "issue:TRNSPRTPCE-1002",
-          "issue:TRNSPRTPCE-1001",
-          "endpoint:GET:/api/v1/network"
-        ],
-        "matched_expected_ids": [
-          "TRNSPRTPCE-980",
-          "de74a89",
           "e10ac2a"
         ],
-        "matched_relationship_edges": [
-          {
-            "source": "commit:de74a89",
-            "target": "issue:TRNSPRTPCE-980",
-            "relationship": "REFERENCES_ISSUE"
-          },
-          {
-            "source": "commit:e10ac2a",
-            "target": "issue:TRNSPRTPCE-980",
-            "relationship": "REFERENCES_ISSUE"
-          }
+        "matched_expected_ids_at_5": [
+          "e10ac2a"
         ],
-        "actual_graph_edges": [
-          {
-            "source": "commit:e10ac2a",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e10ac2a",
-            "target": "issue:TRNSPRTPCE-980",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e10ac2a",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:490a8fb",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:490a8fb",
-            "target": "issue:TRNSPRTPCE-996",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:490a8fb",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-996",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1003",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-980",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:de74a89",
-            "target": "issue:TRNSPRTPCE-980",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:GET:/api/v1/network",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:POST:/api/v1/service-path",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:GET:/restconf/config/ietf-network:networks",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1002",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1001",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1000",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-999",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:de74a89",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:2e7e995",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-979",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:41d02f0",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:de74a89",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:2e7e995",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:41d02f0",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          }
+        "matched_expected_ids_expanded": [
+          "e10ac2a"
         ],
+        "matched_relationship_edges": [],
+        "actual_graph_edges": [],
         "metrics": {
-          "recall": 1.0,
-          "precision": 0.1579,
-          "relationship_recall": 1.0,
-          "groundedness": 0.3333
+          "recall_at_5": 0.3333,
+          "precision_at_5": 0.25,
+          "f1_at_5": 0.2857,
+          "expanded_context_recall": 0.3333,
+          "relationship_recall": 0.0,
+          "groundedness": 0.0,
+          "groundedness_breakdown": {
+            "score": 0.0,
+            "total_claims": 11,
+            "supported_claims": 0,
+            "unsupported_claims": 11,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
-        "answer_snippet": "Based on the provided Knowledge Graph relationships and source evidence, the following GitHub commits are linked to Jira issue **TRNSPRTPCE-980** in the `opendaylight/transportpce` project:\n\n1.  **Commit `de74a89`**\n    *   **Author:** Joakim T\u00f6rnqvist\n    *   **Relationship:** The Knowledge Graph e"
+        "answer_snippet": "Based on the provided context, the GitHub commit linked to Jira issue **TRNSPRTPCE-980** is:\n\n*   **`e10ac2a`**\n\n**Details:**\n*   **Jira Issue:** TRNSPRTPCE-980\n*   **Change-Id:** `Ifd44fd48b8c4cdf3c0be63070ca5f7e17d72257c`\n*   **Signed-off-by:** Joakim T\u00f6rnqvist\n*   **Modified Files:**\n    *   `tap"
       }
     },
     {
@@ -305,7 +215,7 @@
       ],
       "vector_only": {
         "status": "SUCCESS",
-        "latency_sec": 2.267,
+        "latency_sec": 1.436,
         "docs_count": 5,
         "retrieved_source_ids": [
           "GET /api/dataValueSets",
@@ -318,15 +228,24 @@
         "metrics": {
           "recall_at_5": 0.6667,
           "precision_at_5": 1.0,
+          "f1_at_5": 0.8,
           "relationship_recall": 0.0,
-          "groundedness": 0.0
+          "groundedness": 0.7778,
+          "groundedness_breakdown": {
+            "score": 0.7778,
+            "total_claims": 9,
+            "supported_claims": 7,
+            "unsupported_claims": 2,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided context, the following DHIS2 API endpoints handle analytical queries and data value sets:\n\n1.  **`GET /api/dataValueSets`**\n    *   **Function:** Queries and imports aggregate data value sets (including aggregated and tracker health data).\n    *   **Parameters:** `dataSet`, `pe"
       },
       "hybrid_graph_rag": {
         "status": "SUCCESS",
         "retrieval_mode": "hybrid_graph_rag",
-        "latency_sec": 3.033,
+        "latency_sec": 2.392,
         "docs_count": 5,
         "graph_nodes_count": 25,
         "graph_edges_count": 67,
@@ -335,31 +254,35 @@
           "unknown",
           "GET /api/analytics",
           "endpoint:GET:/api/me",
-          "issue:DHIS2-19473",
-          "endpoint:GET:/api/programs",
-          "commit:801e071",
-          "issue:DHIS2-22281",
-          "issue:DHIS2-22095",
-          "component:dataentry",
-          "component:analytics",
-          "commit:18a09bf",
-          "issue:DHIS2-22296",
-          "endpoint:GET:/api/trackedEntityInstances",
-          "issue:DHIS2-21748",
-          "endpoint:POST:/api/dataValueSets",
-          "issue:DHIS2-22301",
-          "endpoint:GET:/api/events",
-          "endpoint:GET:/api/organisationUnits",
-          "endpoint:GET:/api/analytics",
-          "commit:e05976b",
           "commit:fd40e8f",
-          "issue:DHIS2-21397",
-          "issue:DHIS2-22138",
-          "issue:DHIS2-20446",
           "endpoint:GET:/api/dataValueSets",
-          "endpoint:GET:/api/dataElements"
+          "endpoint:POST:/api/dataValueSets",
+          "endpoint:GET:/api/dataElements",
+          "endpoint:GET:/api/events",
+          "component:dataentry",
+          "issue:DHIS2-22095",
+          "issue:DHIS2-22138",
+          "issue:DHIS2-19473",
+          "component:analytics",
+          "commit:e05976b",
+          "issue:DHIS2-22296",
+          "issue:DHIS2-21397",
+          "issue:DHIS2-21748",
+          "endpoint:GET:/api/programs",
+          "endpoint:GET:/api/organisationUnits",
+          "issue:DHIS2-22281",
+          "issue:DHIS2-22301",
+          "issue:DHIS2-20446",
+          "endpoint:GET:/api/trackedEntityInstances",
+          "commit:801e071",
+          "commit:18a09bf",
+          "endpoint:GET:/api/analytics"
         ],
-        "matched_expected_ids": [
+        "matched_expected_ids_at_5": [
+          "GET /api/dataValueSets",
+          "GET /api/analytics"
+        ],
+        "matched_expected_ids_expanded": [
           "GET /api/dataValueSets",
           "POST /api/dataValueSets",
           "GET /api/analytics"
@@ -781,10 +704,20 @@
           }
         ],
         "metrics": {
-          "recall": 1.0,
-          "precision": 0.12,
+          "recall_at_5": 0.6667,
+          "precision_at_5": 0.4,
+          "f1_at_5": 0.5,
+          "expanded_context_recall": 1.0,
           "relationship_recall": 1.0,
-          "groundedness": 0.4286
+          "groundedness": 0.32,
+          "groundedness_breakdown": {
+            "score": 0.32,
+            "total_claims": 25,
+            "supported_claims": 8,
+            "unsupported_claims": 17,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided Knowledge Graph and documentation, the following API endpoints in DHIS2 handle analytical queries and data value sets:\n\n### **1. Analytical Queries**\n*   **`GET /api/analytics`**\n    *   **Function:** Serves as the multi-dimensional analytical query engine.\n    *   **Descriptio"
       }
@@ -813,7 +746,7 @@
       ],
       "vector_only": {
         "status": "SUCCESS",
-        "latency_sec": 13.207,
+        "latency_sec": 4.547,
         "docs_count": 5,
         "retrieved_source_ids": [
           "e10ac2a",
@@ -826,223 +759,57 @@
         "metrics": {
           "recall_at_5": 0.3333,
           "precision_at_5": 0.5,
+          "f1_at_5": 0.4,
           "relationship_recall": 0.0,
-          "groundedness": 0.3333
+          "groundedness": 0.7,
+          "groundedness_breakdown": {
+            "score": 0.7,
+            "total_claims": 10,
+            "supported_claims": 7,
+            "unsupported_claims": 3,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided context, the following commits modified the **tapi** component in TransportPCE:\n\n1.  **Commit `b797659`** by orenais\n    *   **Message:** Build skeleton for TAPI-SBI feature\n    *   **Details:** Created the `tapisbi` Maven project, associated packages, YANG models for TAPI SBI "
       },
       "hybrid_graph_rag": {
         "status": "SUCCESS",
-        "retrieval_mode": "hybrid_graph_rag",
-        "latency_sec": 25.365,
+        "retrieval_mode": "vector_only",
+        "latency_sec": 15.028,
         "docs_count": 5,
-        "graph_nodes_count": 19,
-        "graph_edges_count": 26,
+        "graph_nodes_count": 0,
+        "graph_edges_count": 0,
         "retrieved_source_ids": [
           "unknown",
           "e10ac2a",
-          "2e7e995",
-          "commit:de74a89",
-          "issue:TRNSPRTPCE-1000",
-          "issue:TRNSPRTPCE-979",
-          "issue:TRNSPRTPCE-1003",
-          "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-          "endpoint:POST:/api/v1/service-path",
-          "issue:TRNSPRTPCE-996",
-          "issue:TRNSPRTPCE-980",
-          "commit:490a8fb",
-          "component:tapi",
-          "commit:2e7e995",
-          "commit:e10ac2a",
-          "endpoint:GET:/restconf/config/ietf-network:networks",
-          "commit:41d02f0",
-          "issue:TRNSPRTPCE-999",
-          "issue:TRNSPRTPCE-1002",
-          "issue:TRNSPRTPCE-1001",
-          "endpoint:GET:/api/v1/network"
+          "2e7e995"
         ],
-        "matched_expected_ids": [
-          "de74a89",
-          "2e7e995",
-          "490a8fb"
+        "matched_expected_ids_at_5": [
+          "2e7e995"
         ],
-        "matched_relationship_edges": [
-          {
-            "source": "commit:de74a89",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT"
-          },
-          {
-            "source": "commit:2e7e995",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT"
-          }
+        "matched_expected_ids_expanded": [
+          "2e7e995"
         ],
-        "actual_graph_edges": [
-          {
-            "source": "issue:TRNSPRTPCE-979",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:2e7e995",
-            "target": "issue:TRNSPRTPCE-979",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:41d02f0",
-            "target": "issue:TRNSPRTPCE-979",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e10ac2a",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e10ac2a",
-            "target": "issue:TRNSPRTPCE-980",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e10ac2a",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:2e7e995",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:2e7e995",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-980",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:de74a89",
-            "target": "issue:TRNSPRTPCE-980",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:GET:/api/v1/network",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:POST:/api/v1/service-path",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:GET:/restconf/config/ietf-network:networks",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1003",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1002",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1001",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1000",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-999",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:de74a89",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:41d02f0",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:490a8fb",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-996",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:41d02f0",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:de74a89",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:490a8fb",
-            "target": "component:tapi",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          }
-        ],
+        "matched_relationship_edges": [],
+        "actual_graph_edges": [],
         "metrics": {
-          "recall": 1.0,
-          "precision": 0.1579,
-          "relationship_recall": 1.0,
-          "groundedness": 0.5833
+          "recall_at_5": 0.3333,
+          "precision_at_5": 0.3333,
+          "f1_at_5": 0.3333,
+          "expanded_context_recall": 0.3333,
+          "relationship_recall": 0.0,
+          "groundedness": 0.0465,
+          "groundedness_breakdown": {
+            "score": 0.0465,
+            "total_claims": 43,
+            "supported_claims": 2,
+            "unsupported_claims": 41,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
-        "answer_snippet": "Based on the provided Knowledge Graph relationships and retrieved documentation, the following commits have modified the **`tapi`** component in the **TransportPCE (OpenDaylight)** project:\n\n### **Commits Modifying the `tapi` Component**\n\n1.  **Commit `2e7e995`**\n    *   **Author:** Joakim T\u00f6rnqvist"
+        "answer_snippet": "Based on the provided documentation and source evidence, the following commits modified the **TAPI** (Transport API) component in the `opendaylight/transportpce` project:\n\n### 1. Commit `e10ac2a`\n*   **Author:** Joakim T\u00f6rnqvist\n*   **Date:** 2026-09-10\n*   **Message:** \"TAPI - Share default transfe"
       }
     },
     {
@@ -1063,7 +830,7 @@
       ],
       "vector_only": {
         "status": "SUCCESS",
-        "latency_sec": 12.713,
+        "latency_sec": 13.451,
         "docs_count": 5,
         "retrieved_source_ids": [
           "GET /api/me",
@@ -1075,48 +842,60 @@
         "metrics": {
           "recall_at_5": 0.5,
           "precision_at_5": 0.5,
+          "f1_at_5": 0.5,
           "relationship_recall": 0.0,
-          "groundedness": 0.0
+          "groundedness": 0.6667,
+          "groundedness_breakdown": {
+            "score": 0.6667,
+            "total_claims": 6,
+            "supported_claims": 4,
+            "unsupported_claims": 2,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided context, the `GET /api/me` endpoint allows access to the following user profile information and settings for the currently authenticated user:\n\n*   **Profile**: General user profile details.\n*   **Authorities**: User authorities/roles.\n*   **User Groups**: User group membership"
       },
       "hybrid_graph_rag": {
         "status": "SUCCESS",
         "retrieval_mode": "hybrid_graph_rag",
-        "latency_sec": 36.856,
+        "latency_sec": 40.402,
         "docs_count": 5,
         "graph_nodes_count": 25,
-        "graph_edges_count": 66,
+        "graph_edges_count": 65,
         "retrieved_source_ids": [
           "GET /api/me",
           "unknown",
           "GET /api/trackedEntityInstances",
           "endpoint:GET:/api/me",
-          "issue:DHIS2-19473",
-          "endpoint:GET:/api/programs",
-          "commit:801e071",
-          "issue:DHIS2-22281",
-          "issue:DHIS2-22095",
-          "commit:18a09bf",
-          "issue:DHIS2-22296",
-          "endpoint:GET:/api/trackedEntityInstances",
-          "issue:DHIS2-21748",
-          "endpoint:POST:/api/dataValueSets",
-          "issue:DHIS2-22301",
-          "endpoint:GET:/api/events",
-          "endpoint:GET:/api/organisationUnits",
-          "component:tracker",
-          "endpoint:GET:/api/analytics",
-          "commit:e05976b",
-          "component:usermanagement",
           "commit:fd40e8f",
-          "issue:DHIS2-21397",
-          "issue:DHIS2-22138",
-          "issue:DHIS2-20446",
           "endpoint:GET:/api/dataValueSets",
-          "endpoint:GET:/api/dataElements"
+          "endpoint:POST:/api/dataValueSets",
+          "endpoint:GET:/api/dataElements",
+          "endpoint:GET:/api/events",
+          "component:usermanagement",
+          "issue:DHIS2-22095",
+          "component:tracker",
+          "issue:DHIS2-22138",
+          "issue:DHIS2-19473",
+          "commit:e05976b",
+          "issue:DHIS2-22296",
+          "issue:DHIS2-21397",
+          "issue:DHIS2-21748",
+          "endpoint:GET:/api/programs",
+          "endpoint:GET:/api/organisationUnits",
+          "issue:DHIS2-22281",
+          "issue:DHIS2-22301",
+          "issue:DHIS2-20446",
+          "endpoint:GET:/api/trackedEntityInstances",
+          "commit:801e071",
+          "commit:18a09bf",
+          "endpoint:GET:/api/analytics"
         ],
-        "matched_expected_ids": [
+        "matched_expected_ids_at_5": [
+          "GET /api/me"
+        ],
+        "matched_expected_ids_expanded": [
           "GET /api/me"
         ],
         "matched_relationship_edges": [
@@ -1127,18 +906,6 @@
           }
         ],
         "actual_graph_edges": [
-          {
-            "source": "endpoint:GET:/api/trackedEntityInstances",
-            "target": "component:tracker",
-            "relationship": "RELATED_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:dhis2/dhis2-core",
-            "target": "endpoint:GET:/api/trackedEntityInstances",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
           {
             "source": "endpoint:GET:/api/me",
             "target": "component:usermanagement",
@@ -1152,9 +919,15 @@
             "provenance": "inferred"
           },
           {
-            "source": "endpoint:GET:/api/programs",
+            "source": "endpoint:GET:/api/trackedEntityInstances",
             "target": "component:tracker",
             "relationship": "RELATED_TO",
+            "provenance": "inferred"
+          },
+          {
+            "source": "project:dhis2/dhis2-core",
+            "target": "endpoint:GET:/api/trackedEntityInstances",
+            "relationship": "EXPOSES_ENDPOINT",
             "provenance": "inferred"
           },
           {
@@ -1525,10 +1298,20 @@
           }
         ],
         "metrics": {
-          "recall": 0.5,
-          "precision": 0.04,
+          "recall_at_5": 0.5,
+          "precision_at_5": 0.2,
+          "f1_at_5": 0.2857,
+          "expanded_context_recall": 0.5,
           "relationship_recall": 1.0,
-          "groundedness": 0.0
+          "groundedness": 0.2632,
+          "groundedness_breakdown": {
+            "score": 0.2632,
+            "total_claims": 19,
+            "supported_claims": 5,
+            "unsupported_claims": 14,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided Knowledge Graph and documentation context, the user profile information and settings accessible via the DHIS2 API are primarily retrieved through the **`GET /api/me`** endpoint.\n\n### **Accessible User Profile Information**\nThe `GET /api/me` endpoint (part of the **UserManagemen"
       }
@@ -1550,7 +1333,7 @@
       ],
       "vector_only": {
         "status": "SUCCESS",
-        "latency_sec": 1.912,
+        "latency_sec": 1.946,
         "docs_count": 5,
         "retrieved_source_ids": [
           "POST /restconf/operations/transportpce-pce:path-computation-request",
@@ -1562,188 +1345,57 @@
         "metrics": {
           "recall_at_5": 1.0,
           "precision_at_5": 0.5,
+          "f1_at_5": 0.6667,
           "relationship_recall": 0.0,
-          "groundedness": 0.0
+          "groundedness": 0.75,
+          "groundedness_breakdown": {
+            "score": 0.75,
+            "total_claims": 8,
+            "supported_claims": 6,
+            "unsupported_claims": 2,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided context, the following RESTCONF RPC operations and endpoints are available for path computation in TransportPCE:\n\n1.  **POST /restconf/operations/transportpce-pce:path-computation-request**\n    *   **Function:** Invokes the PCE optical routing algorithm RPC.\n    *   **Details:*"
       },
       "hybrid_graph_rag": {
         "status": "SUCCESS",
-        "retrieval_mode": "hybrid_graph_rag",
-        "latency_sec": 25.985,
+        "retrieval_mode": "vector_only",
+        "latency_sec": 2.697,
         "docs_count": 5,
-        "graph_nodes_count": 21,
-        "graph_edges_count": 21,
+        "graph_nodes_count": 0,
+        "graph_edges_count": 0,
         "retrieved_source_ids": [
           "POST /restconf/operations/transportpce-pce:path-computation-request",
           "unknown",
-          "POST /api/v1/service-path",
-          "commit:de74a89",
-          "issue:TRNSPRTPCE-1000",
-          "issue:TRNSPRTPCE-979",
-          "issue:TRNSPRTPCE-1003",
-          "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-          "endpoint:POST:/api/v1/service-path",
-          "component:routing",
-          "component:pce",
-          "component:operations",
-          "issue:TRNSPRTPCE-996",
-          "issue:TRNSPRTPCE-980",
-          "commit:490a8fb",
-          "commit:2e7e995",
-          "commit:e10ac2a",
-          "endpoint:GET:/restconf/config/ietf-network:networks",
-          "commit:41d02f0",
-          "issue:TRNSPRTPCE-999",
-          "issue:TRNSPRTPCE-1002",
-          "issue:TRNSPRTPCE-1001",
-          "endpoint:GET:/api/v1/network"
+          "POST /api/v1/service-path"
         ],
-        "matched_expected_ids": [
+        "matched_expected_ids_at_5": [
           "POST /restconf/operations/transportpce-pce:path-computation-request"
         ],
-        "matched_relationship_edges": [
-          {
-            "source": "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-            "target": "component:pce",
-            "relationship": "RELATED_TO"
-          }
+        "matched_expected_ids_expanded": [
+          "POST /restconf/operations/transportpce-pce:path-computation-request"
         ],
-        "actual_graph_edges": [
-          {
-            "source": "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-            "target": "component:pce",
-            "relationship": "RELATED_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-            "target": "component:operations",
-            "relationship": "RELATED_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:POST:/restconf/operations/transportpce-pce:path-computation-request",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "endpoint:POST:/api/v1/service-path",
-            "target": "component:pce",
-            "relationship": "RELATED_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "endpoint:POST:/api/v1/service-path",
-            "target": "component:routing",
-            "relationship": "RELATED_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:POST:/api/v1/service-path",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:GET:/api/v1/network",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "project:opendaylight/transportpce",
-            "target": "endpoint:GET:/restconf/config/ietf-network:networks",
-            "relationship": "EXPOSES_ENDPOINT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1003",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1002",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1001",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-1000",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-999",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:de74a89",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-980",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e10ac2a",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:2e7e995",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-979",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:41d02f0",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:490a8fb",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "issue:TRNSPRTPCE-996",
-            "target": "project:opendaylight/transportpce",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          }
-        ],
+        "matched_relationship_edges": [],
+        "actual_graph_edges": [],
         "metrics": {
-          "recall": 1.0,
-          "precision": 0.0476,
-          "relationship_recall": 1.0,
-          "groundedness": 0.4545
+          "recall_at_5": 1.0,
+          "precision_at_5": 0.3333,
+          "f1_at_5": 0.5,
+          "expanded_context_recall": 1.0,
+          "relationship_recall": 0.0,
+          "groundedness": 0.0,
+          "groundedness_breakdown": {
+            "score": 0.0,
+            "total_claims": 25,
+            "supported_claims": 0,
+            "unsupported_claims": 25,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
-        "answer_snippet": "Based on the provided Knowledge Graph and documentation, the following RESTCONF RPC operations and endpoints are available for path computation in **TransportPCE (OpenDaylight)**:\n\n### 1. `POST /restconf/operations/transportpce-pce:path-computation-request`\n*   **Function:** Invokes the Path Computa"
+        "answer_snippet": "Based on the provided documentation and source evidence for the `opendaylight/transportpce` project, the following RESTCONF RPC operations and endpoints are available for path computation:\n\n### 1. PCE Path Computation Request (RESTCONF)\n*   **Endpoint:** `POST /restconf/operations/transportpce-pce:p"
       }
     },
     {
@@ -1764,7 +1416,7 @@
       ],
       "vector_only": {
         "status": "SUCCESS",
-        "latency_sec": 2.128,
+        "latency_sec": 11.404,
         "docs_count": 5,
         "retrieved_source_ids": [
           "55bfcba",
@@ -1779,15 +1431,24 @@
         "metrics": {
           "recall_at_5": 0.5,
           "precision_at_5": 0.25,
+          "f1_at_5": 0.3333,
           "relationship_recall": 0.0,
-          "groundedness": 1.0
+          "groundedness": 0.8,
+          "groundedness_breakdown": {
+            "score": 0.8,
+            "total_claims": 10,
+            "supported_claims": 8,
+            "unsupported_claims": 2,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided context, the bug reported in **DHIS2-22296** is that **org unit merge silently deletes the target's own data values when the target already has data**.\n\nSpecifically, when using the `LAST_UPDATED` strategy (the default), the merge process:\n1.  First deleted all of the target's "
       },
       "hybrid_graph_rag": {
         "status": "SUCCESS",
         "retrieval_mode": "hybrid_graph_rag",
-        "latency_sec": 42.87,
+        "latency_sec": 27.96,
         "docs_count": 5,
         "graph_nodes_count": 25,
         "graph_edges_count": 71,
@@ -1797,31 +1458,34 @@
           "a091387",
           "e05976b",
           "endpoint:GET:/api/me",
-          "issue:DHIS2-19473",
-          "endpoint:GET:/api/programs",
-          "commit:801e071",
-          "commit:18a09bf",
-          "component:[api] other",
-          "issue:DHIS2-22296",
-          "endpoint:GET:/api/trackedEntityInstances",
-          "commit:a091387",
-          "issue:DHIS2-21748",
-          "endpoint:POST:/api/dataValueSets",
-          "issue:DHIS2-22301",
-          "endpoint:GET:/api/events",
-          "endpoint:GET:/api/organisationUnits",
-          "issue:DHIS2-22255",
-          "component:dhis-2",
-          "endpoint:GET:/api/analytics",
-          "commit:55bfcba",
-          "commit:e05976b",
-          "issue:DHIS2-21397",
-          "issue:DHIS2-22138",
-          "issue:DHIS2-20446",
           "endpoint:GET:/api/dataValueSets",
-          "endpoint:GET:/api/dataElements"
+          "endpoint:POST:/api/dataValueSets",
+          "endpoint:GET:/api/dataElements",
+          "endpoint:GET:/api/events",
+          "commit:55bfcba",
+          "commit:801e071",
+          "issue:DHIS2-22255",
+          "issue:DHIS2-22138",
+          "issue:DHIS2-19473",
+          "commit:e05976b",
+          "issue:DHIS2-22296",
+          "issue:DHIS2-21397",
+          "issue:DHIS2-21748",
+          "endpoint:GET:/api/programs",
+          "commit:a091387",
+          "component:dhis-2",
+          "endpoint:GET:/api/organisationUnits",
+          "issue:DHIS2-22301",
+          "issue:DHIS2-20446",
+          "endpoint:GET:/api/trackedEntityInstances",
+          "component:[api] other",
+          "commit:18a09bf",
+          "endpoint:GET:/api/analytics"
         ],
-        "matched_expected_ids": [
+        "matched_expected_ids_at_5": [
+          "DHIS2-22296"
+        ],
+        "matched_expected_ids_expanded": [
           "DHIS2-22296"
         ],
         "matched_relationship_edges": [
@@ -1833,49 +1497,7 @@
         ],
         "actual_graph_edges": [
           {
-            "source": "issue:DHIS2-22138",
-            "target": "project:dhis2/dhis2-core",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e05976b",
-            "target": "issue:DHIS2-22138",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:55bfcba",
-            "target": "project:dhis2/dhis2-core",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:55bfcba",
-            "target": "issue:DHIS2-22296",
-            "relationship": "REFERENCES_ISSUE",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:55bfcba",
-            "target": "component:dhis-2",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e05976b",
-            "target": "project:dhis2/dhis2-core",
-            "relationship": "BELONGS_TO",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:e05976b",
-            "target": "component:dhis-2",
-            "relationship": "MODIFIES_COMPONENT",
-            "provenance": "inferred"
-          },
-          {
-            "source": "commit:a091387",
+            "source": "issue:DHIS2-22255",
             "target": "project:dhis2/dhis2-core",
             "relationship": "BELONGS_TO",
             "provenance": "inferred"
@@ -1888,14 +1510,14 @@
           },
           {
             "source": "commit:a091387",
-            "target": "component:dhis-2",
-            "relationship": "MODIFIES_COMPONENT",
+            "target": "project:dhis2/dhis2-core",
+            "relationship": "BELONGS_TO",
             "provenance": "inferred"
           },
           {
-            "source": "issue:DHIS2-22255",
-            "target": "project:dhis2/dhis2-core",
-            "relationship": "BELONGS_TO",
+            "source": "commit:a091387",
+            "target": "component:dhis-2",
+            "relationship": "MODIFIES_COMPONENT",
             "provenance": "inferred"
           },
           {
@@ -1914,6 +1536,48 @@
             "source": "commit:18a09bf",
             "target": "issue:DHIS2-22296",
             "relationship": "REFERENCES_ISSUE",
+            "provenance": "inferred"
+          },
+          {
+            "source": "commit:55bfcba",
+            "target": "issue:DHIS2-22296",
+            "relationship": "REFERENCES_ISSUE",
+            "provenance": "inferred"
+          },
+          {
+            "source": "commit:55bfcba",
+            "target": "project:dhis2/dhis2-core",
+            "relationship": "BELONGS_TO",
+            "provenance": "inferred"
+          },
+          {
+            "source": "commit:55bfcba",
+            "target": "component:dhis-2",
+            "relationship": "MODIFIES_COMPONENT",
+            "provenance": "inferred"
+          },
+          {
+            "source": "issue:DHIS2-22138",
+            "target": "project:dhis2/dhis2-core",
+            "relationship": "BELONGS_TO",
+            "provenance": "inferred"
+          },
+          {
+            "source": "commit:e05976b",
+            "target": "issue:DHIS2-22138",
+            "relationship": "REFERENCES_ISSUE",
+            "provenance": "inferred"
+          },
+          {
+            "source": "commit:e05976b",
+            "target": "project:dhis2/dhis2-core",
+            "relationship": "BELONGS_TO",
+            "provenance": "inferred"
+          },
+          {
+            "source": "commit:e05976b",
+            "target": "component:dhis-2",
+            "relationship": "MODIFIES_COMPONENT",
             "provenance": "inferred"
           },
           {
@@ -2260,10 +1924,20 @@
           }
         ],
         "metrics": {
-          "recall": 0.5,
-          "precision": 0.0417,
+          "recall_at_5": 0.5,
+          "precision_at_5": 0.2,
+          "f1_at_5": 0.2857,
+          "expanded_context_recall": 0.5,
           "relationship_recall": 1.0,
-          "groundedness": 0.2222
+          "groundedness": 0.2083,
+          "groundedness_breakdown": {
+            "score": 0.2083,
+            "total_claims": 24,
+            "supported_claims": 5,
+            "unsupported_claims": 19,
+            "method": "lexical_and_entity_overlap_heuristic",
+            "notes": "Automated entity containment and lexical token overlap heuristic."
+          }
         },
         "answer_snippet": "Based on the provided Knowledge Graph and documentation context, here is the detailed breakdown of the bug reported in **DHIS2-22296** and the associated API endpoints.\n\n### **Bug Description: DHIS2-22296**\n**Title:** Org unit merge silently deletes the target's own data values when the target alrea"
       }

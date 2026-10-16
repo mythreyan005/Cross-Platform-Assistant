@@ -1,0 +1,16 @@
+{
+  "project": "DHIS2 Core Platform",
+  "repo": "dhis2/dhis2-core",
+  "index_version": "2.1",
+  "indexed_at": "2026-10-16 19:30:00",
+  "status": "READY",
+  "jira_issues": 10,
+  "github_commits": 10,
+  "openapi_endpoints": 28,
+  "vector_chunks": 48,
+  "graph_stats": {
+    "node_count": 94,
+    "edge_count": 146,
+    "project_id": "dhis2/dhis2-core"
+  }
+}

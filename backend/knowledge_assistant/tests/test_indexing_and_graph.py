@@ -147,11 +147,12 @@ class IndexingAndGraphTests(TestCase):
         nodes, edges, ctx = self.kg.get_subgraph_for_seeds([center], max_depth=2, max_total_nodes=10)
         self.assertLessEqual(len(nodes), 10)
 
+    @patch("knowledge_assistant.rag_pipeline.SoftwareKnowledgeGraph.save_to_file")
     @patch("knowledge_assistant.rag_pipeline.fetch_openapi_records")
     @patch("knowledge_assistant.rag_pipeline.fetch_github_records")
     @patch("knowledge_assistant.rag_pipeline.fetch_jira_records")
     @patch("knowledge_assistant.rag_pipeline.get_vector_store")
-    def test_safe_indexing_upserts_before_deleting(self, mock_get_vs, mock_jira, mock_gh, mock_oas):
+    def test_safe_indexing_upserts_before_deleting(self, mock_get_vs, mock_jira, mock_gh, mock_oas, mock_save):
         """Verifies safe indexing sequence: add_documents occurs before pruning obsolete chunks."""
         call_order = []
         mock_vs = MagicMock()
@@ -173,7 +174,10 @@ class IndexingAndGraphTests(TestCase):
             )
         ]
 
-        load_and_index_data(repo="opendaylight/transportpce", max_commits=2, max_issues=2)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_file = os.path.join(tmp_dir, "manifest.json")
+            with patch.dict(PROJECT_CONFIGS["opendaylight/transportpce"], {"manifest_file": manifest_file}):
+                load_and_index_data(repo="opendaylight/transportpce", max_commits=2, max_issues=2)
         self.assertEqual(call_order, ["add_documents", "delete"])
 
     @patch("knowledge_assistant.rag_pipeline.fetch_openapi_records")
@@ -199,8 +203,11 @@ class IndexingAndGraphTests(TestCase):
             )
         ]
 
-        with self.assertRaises(RuntimeError):
-            load_and_index_data(repo="opendaylight/transportpce", max_commits=2, max_issues=2)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_file = os.path.join(tmp_dir, "manifest.json")
+            with patch.dict(PROJECT_CONFIGS["opendaylight/transportpce"], {"manifest_file": manifest_file}):
+                with self.assertRaises(RuntimeError):
+                    load_and_index_data(repo="opendaylight/transportpce", max_commits=2, max_issues=2)
 
         # Confirm delete was never called since add_documents failed
         mock_vs.delete.assert_not_called()
