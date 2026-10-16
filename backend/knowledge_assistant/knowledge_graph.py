@@ -309,7 +309,8 @@ class SoftwareKnowledgeGraph:
 
     def find_node(self, identifier: str) -> Optional[str]:
         """
-        Fuzzy or exact lookup for node ID given a keyword, SHA, issue key, or endpoint path.
+        Fuzzy or exact lookup for node ID given a keyword, full/short SHA, issue key, or endpoint path.
+        Handles both prefixed (e.g. 'commit:de74a89') and unprefixed (e.g. 'de74a89') identifiers.
         """
         clean_id = identifier.strip()
 
@@ -317,20 +318,28 @@ class SoftwareKnowledgeGraph:
         if self.graph.has_node(clean_id):
             return clean_id
 
-        # 1. Try exact node ID prefix construction
+        # Strip explicit prefixes for normalized resolution
+        clean_lower = clean_id.lower()
+        unprefixed = clean_id
+        for pfx in ("commit:", "issue:", "endpoint:", "component:", "project:"):
+            if clean_lower.startswith(pfx):
+                unprefixed = clean_id[len(pfx):].strip()
+                break
+        unprefixed_lower = unprefixed.lower()
+
+        # 1. Try exact node ID prefix construction on unprefixed value
         for prefix in (self._issue_node_id, self._commit_node_id, self._endpoint_node_id, self._component_node_id):
-            cand = prefix(clean_id)
+            cand = prefix(unprefixed)
             if self.graph.has_node(cand):
                 return cand
 
-        # 2. Try attribute-based matching
-        clean_lower = clean_id.lower()
+        # 2. Try attribute-based matching on unprefixed identifier
         for n, data in self.graph.nodes(data=True):
-            if data.get("key", "").lower() == clean_lower:
+            if data.get("key", "").lower() == unprefixed_lower:
                 return n
-            if data.get("name", "").lower() == clean_lower:
+            if data.get("name", "").lower() == unprefixed_lower:
                 return n
-            if data.get("path", "").lower() == clean_lower:
+            if data.get("path", "").lower() == unprefixed_lower:
                 return n
 
         # Check commit SHA matching with prefix tolerance (>= 7 chars)
@@ -338,16 +347,16 @@ class SoftwareKnowledgeGraph:
             if data.get("node_type") == NodeType.COMMIT.value:
                 full_sha = data.get("sha", "").lower()
                 short_sha = data.get("short_sha", "").lower()
-                if full_sha == clean_lower or short_sha == clean_lower:
+                if full_sha == unprefixed_lower or short_sha == unprefixed_lower:
                     return n
-                if len(clean_lower) >= 7 and (full_sha.startswith(clean_lower) or clean_lower.startswith(short_sha)):
+                if len(unprefixed_lower) >= 7 and (full_sha.startswith(unprefixed_lower) or unprefixed_lower.startswith(short_sha)):
                     return n
 
         # 3. Substring matching for component keywords
         for n, data in self.graph.nodes(data=True):
             if data.get("node_type") == NodeType.COMPONENT.value:
                 comp_name = data.get("name", "").lower()
-                if comp_name and (comp_name == clean_lower or (len(clean_lower) > 3 and clean_lower in comp_name)):
+                if comp_name and (comp_name == unprefixed_lower or (len(unprefixed_lower) > 3 and unprefixed_lower in comp_name)):
                     return n
 
         return None

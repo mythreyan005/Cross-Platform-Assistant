@@ -214,48 +214,81 @@ EVALUATION_DATASET = [
 # 3. METRIC CALCULATION ENGINE
 # ==============================================================================
 
+class ClaimVerificationProtocol:
+    """
+    Formal Claim Verification Protocol for ICITIIT 2027 Scientific Evaluation.
+    Protocol Specification:
+    1. Sentence Segmentation: Answers are segmented into discrete factual assertions.
+    2. Evidence Corpus: Composed of retrieved text passages (ChromaDB) and verified graph triples (NetworkX).
+    3. Technical Identifier Constraint: Every technical identifier (Jira issue key, commit SHA, endpoint path)
+       mentioned in a claim MUST resolve to an identifier in the evidence corpus. An unverified identifier marks
+       the claim as unsupported.
+    4. Lexical/Semantic Verification: For claims without technical identifiers, the claim is checked for token
+       overlap (significant words > 3 characters) against the evidence text (threshold >= 40%).
+    5. Scoring: Groundedness = |Supported Claims| / |Total Claims| (strictly 0.0 if execution failed or empty).
+    """
+    PASS_OVERLAP_THRESHOLD = 0.40
+
+
 def calculate_retrieval_metrics(
     expected_ids: List[str],
     retrieved_ids: List[str],
     cutoff_k: Optional[int] = 5
-) -> Tuple[float, float, List[str]]:
+) -> Tuple[float, float, float, List[str]]:
     """
-    Computes Recall@k and Precision@k using canonical identifier matching.
+    Computes Recall@k, Precision@k, and F1@k using canonical identifier matching.
+    Deduplicates multiple chunks of the same source record to prevent unfair metric inflation.
+    
+    Returns: (recall, precision, f1, matched_expected_ids)
     """
     if not expected_ids:
-        return 1.0, 1.0, []
+        # Vacuously complete if no entities expected
+        return 1.0, 1.0, 1.0, []
 
-    # Apply cutoff if specified
-    candidate_ids = retrieved_ids[:cutoff_k] if cutoff_k is not None else retrieved_ids
+    if not retrieved_ids:
+        return 0.0, 0.0, 0.0, []
 
-    # Deduplicate retrieved candidates canonically
+    # 1. Deduplicate retrieved source records canonically so multiple chunks of the same source record
+    # do not unfairly inflate or distort retrieval statistics
     unique_retrieved = []
-    for r in candidate_ids:
+    for r in retrieved_ids:
         if not any(artifact_ids_match(r, u) for u in unique_retrieved):
             unique_retrieved.append(r)
 
+    # 2. Apply cutoff k strictly to unique source records
+    candidate_ids = unique_retrieved[:cutoff_k] if cutoff_k is not None else unique_retrieved
+
+    # 3. Match against expected ground-truth IDs
     matched_expected = []
     for exp in expected_ids:
-        for ret in unique_retrieved:
+        for ret in candidate_ids:
             if artifact_ids_match(exp, ret):
                 matched_expected.append(exp)
                 break
 
     recall = round(len(matched_expected) / len(expected_ids), 4)
-    precision = round(len(matched_expected) / len(unique_retrieved), 4) if unique_retrieved else 0.0
+    precision = round(len(matched_expected) / len(candidate_ids), 4) if candidate_ids else 0.0
+    f1 = round((2 * precision * recall) / (precision + recall), 4) if (precision + recall) > 0 else 0.0
 
-    return recall, precision, matched_expected
+    return recall, precision, f1, matched_expected
 
 
 def evaluate_relationship_recall(
     expected_edges: List[Dict[str, str]],
-    retrieved_edges: List[Dict[str, Any]]
+    retrieved_edges: List[Dict[str, Any]],
+    edge_budget: int = 30
 ) -> Tuple[float, List[Dict[str, str]]]:
     """
     Evaluates relationship recall using actual structured graph edges and their relationship types.
+    Enforces a strict edge budget constraint (default 30 edges).
     """
     if not expected_edges:
         return 1.0, []
+
+    if not retrieved_edges:
+        return 0.0, []
+
+    bounded_retrieved = retrieved_edges[:edge_budget]
 
     matched_edges = []
     for exp in expected_edges:
@@ -264,7 +297,7 @@ def evaluate_relationship_recall(
         exp_rel = exp["relationship"]
 
         found = False
-        for ret in retrieved_edges:
+        for ret in bounded_retrieved:
             ret_src = ret.get("source", "")
             ret_tgt = ret.get("target", "")
             ret_rel = ret.get("relationship", "")
@@ -288,42 +321,120 @@ def evaluate_groundedness(
     answer_text: str,
     retrieved_source_ids: List[str],
     graph_edges: List[Dict[str, Any]],
-    status: str
-) -> float:
+    evidence_texts: Optional[List[str]] = None,
+    status: str = "SUCCESS"
+) -> Dict[str, Any]:
     """
-    Assesses whether claims made in the answer are supported by retrieved evidence.
-    Automated Protocol:
-    - Extracts all technical identifiers (Jira keys, commit SHAs, endpoints) in answer.
-    - Verifies whether each identifier is present in retrieved evidence chunks or graph edges.
-    - Returns ratio of supported entities.
+    Evidence-based groundedness assessment.
+    Eliminates all hardcoded scores.
+    API failures and empty retrievals receive 0.0.
+    Extractive fallbacks and LLM answers are actively decomposed into claims and verified against evidence.
     """
-    if status == "EMPTY_RETRIEVAL":
-        # Truthful refusal to answer due to missing context is 100% grounded
-        return 1.0 if "no relevant" in answer_text.lower() or "insufficient" in answer_text.lower() else 0.0
+    if status in ("API_ERROR", "EMPTY_RETRIEVAL"):
+        return {
+            "score": 0.0,
+            "total_claims": 0,
+            "supported_claims": 0,
+            "unsupported_claims": 0,
+            "contradicted_claims": 0,
+            "method": "automated_claim_verification",
+            "notes": f"Zero groundedness assigned due to status={status}."
+        }
 
-    if status == "EXTRACTIVE_FALLBACK":
-        return 0.85  # Pure extraction from retrieved context
+    if not answer_text or not answer_text.strip():
+        return {
+            "score": 0.0,
+            "total_claims": 0,
+            "supported_claims": 0,
+            "unsupported_claims": 0,
+            "contradicted_claims": 0,
+            "method": "automated_claim_verification",
+            "notes": "Empty answer text."
+        }
 
-    # Extract all technical entities mentioned in generated answer
-    mentioned = extract_entities_from_text(answer_text)
-    all_mentioned = mentioned.get("jira_keys", []) + mentioned.get("commit_shas", []) + mentioned.get("endpoints", [])
+    # 1. Segment answer into sentence-level claims
+    raw_sentences = re.split(r'(?<=[.!?])\s+|\n+', answer_text)
+    claims = []
+    for s in raw_sentences:
+        clean_s = s.strip()
+        clean_s = re.sub(r'^[#*\-•\d\.\s]+', '', clean_s).strip()
+        if len(clean_s) > 15 and not clean_s.startswith("http"):
+            claims.append(clean_s)
 
-    if not all_mentioned:
-        # Conceptual answer without specific technical identifiers
-        return 1.0
+    if not claims:
+        return {
+            "score": 0.0,
+            "total_claims": 0,
+            "supported_claims": 0,
+            "unsupported_claims": 0,
+            "contradicted_claims": 0,
+            "method": "automated_claim_verification",
+            "notes": "No substantive claims extracted from answer."
+        }
 
-    # Build known evidence pool
-    evidence_pool = list(retrieved_source_ids)
+    # 2. Build canonical evidence pool
+    evidence_pool: Set[str] = set()
+    for sid in retrieved_source_ids:
+        t, v = normalize_artifact_id(sid)
+        if v:
+            evidence_pool.add(v.lower())
     for e in graph_edges:
-        evidence_pool.append(e.get("source", ""))
-        evidence_pool.append(e.get("target", ""))
+        s_t, s_v = normalize_artifact_id(e.get("source", ""))
+        t_t, t_v = normalize_artifact_id(e.get("target", ""))
+        if s_v:
+            evidence_pool.add(s_v.lower())
+        if t_v:
+            evidence_pool.add(t_v.lower())
 
-    supported = 0
-    for entity in all_mentioned:
-        if any(artifact_ids_match(entity, ev) for ev in evidence_pool):
-            supported += 1
+    full_evidence_text = " ".join(evidence_texts or []).lower()
+    for e in graph_edges:
+        full_evidence_text += f" {e.get('source', '')} {e.get('relationship', '')} {e.get('target', '')}".lower()
 
-    return round(supported / len(all_mentioned), 4)
+    supported_count = 0
+    unsupported_count = 0
+
+    for claim in claims:
+        claim_entities = extract_entities_from_text(claim)
+        mentioned = (
+            claim_entities.get("jira_keys", []) +
+            claim_entities.get("commit_shas", []) +
+            claim_entities.get("endpoints", [])
+        )
+
+        if mentioned:
+            # All technical identifiers in the claim must be confirmed in evidence
+            all_supported = True
+            for ent in mentioned:
+                _, ent_val = normalize_artifact_id(ent)
+                if not any(artifact_ids_match(ent, ev) or ent_val.lower() in ev for ev in evidence_pool):
+                    all_supported = False
+                    break
+            if all_supported:
+                supported_count += 1
+            else:
+                unsupported_count += 1
+        else:
+            # Claim without technical identifiers: verify significant token overlap against evidence
+            claim_tokens = [w.lower() for w in re.findall(r'\b[a-zA-Z]{4,}\b', claim)]
+            if not claim_tokens:
+                unsupported_count += 1
+                continue
+            matched_tokens = sum(1 for tok in claim_tokens if tok in full_evidence_text)
+            overlap_ratio = matched_tokens / len(claim_tokens)
+            if overlap_ratio >= ClaimVerificationProtocol.PASS_OVERLAP_THRESHOLD:
+                supported_count += 1
+            else:
+                unsupported_count += 1
+
+    score = round(supported_count / len(claims), 4) if claims else 0.0
+    return {
+        "score": score,
+        "total_claims": len(claims),
+        "supported_claims": supported_count,
+        "unsupported_claims": unsupported_count,
+        "contradicted_claims": 0,
+        "method": "automated_claim_verification"
+    }
 
 
 # ==============================================================================
@@ -362,6 +473,7 @@ def run_vector_only_rag(question: str, repo: str, groq_api_key: str, top_k: int 
 
     docs = vs.similarity_search(question, k=top_k)
     context_str = "\n\n".join([f"[{d.metadata.get('source_type', 'doc').upper()}] {d.page_content}" for d in docs])
+    evidence_texts = [d.page_content for d in docs]
 
     retrieved_source_ids = []
     for d in docs:
@@ -377,7 +489,8 @@ def run_vector_only_rag(question: str, repo: str, groq_api_key: str, top_k: int 
             "latency_sec": round(time.time() - start_time, 3),
             "docs_retrieved": 0,
             "retrieved_source_ids": [],
-            "graph_edges": []
+            "graph_edges": [],
+            "evidence_texts": []
         }
 
     llm = ChatGroq(temperature=0.0, model_name="qwen/qwen3.8-27b", groq_api_key=groq_api_key, max_tokens=250)
@@ -397,7 +510,8 @@ def run_vector_only_rag(question: str, repo: str, groq_api_key: str, top_k: int 
         "latency_sec": round(latency, 3),
         "docs_retrieved": len(docs),
         "retrieved_source_ids": retrieved_source_ids,
-        "graph_edges": []  # Vector store possesses no relational graph edges
+        "graph_edges": [],
+        "evidence_texts": evidence_texts
     }
 
 
@@ -429,6 +543,7 @@ def run_hybrid_graph_rag(question: str, repo: str, groq_api_key: str, top_k: int
             retrieved_source_ids.append(sid)
 
     graph_edges = res.get("graph_edges", [])
+    evidence_texts = res.get("evidence", [])
 
     return {
         "method": "hybrid_graph_rag",
@@ -440,6 +555,7 @@ def run_hybrid_graph_rag(question: str, repo: str, groq_api_key: str, top_k: int
         "graph_edges_count": len(graph_edges),
         "retrieved_source_ids": retrieved_source_ids,
         "graph_edges": graph_edges,
+        "evidence_texts": evidence_texts,
         "retrieval_mode": res.get("retrieval_mode", "vector_only")
     }
 
@@ -447,21 +563,29 @@ def run_hybrid_graph_rag(question: str, repo: str, groq_api_key: str, top_k: int
 def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
     """
     Executes benchmark comparison on the evaluation dataset.
-    Generates quantitative comparison results without hardcoded assertions.
+    Fair comparison at cutoff k=5 for both vector baseline and hybrid graph RAG.
+    Tracks operational reliability and groundedness dynamically.
     """
     print(f"\n=======================================================")
     print(f"Executing Comparative Evaluation: Vector vs Hybrid RAG")
     print(f"Benchmark Dataset Size: {len(EVALUATION_DATASET)} queries")
-    print(f"Retrieval Cutoff: k = 5 documents")
+    print(f"Fair Retrieval Cutoff: k = 5 documents (both modalities)")
+    print(f"Graph Traversal Budget: max 25 nodes, max 30 edges")
     print(f"LLM Configuration: qwen/qwen3.8-27b (temperature=0.0)")
     print(f"=======================================================\n")
 
     results = []
-    v_recalls, h_recalls = [], []
-    v_precisions, h_precisions = [], []
+    v_recalls_at_5, h_recalls_at_5 = [], []
+    v_precisions_at_5, h_precisions_at_5 = [], []
+    v_f1s_at_5, h_f1s_at_5 = [], []
+    h_expanded_recalls = []
     v_rel_recalls, h_rel_recalls = [], []
     v_groundedness, h_groundedness = [], []
     v_latencies, h_latencies = [], []
+
+    # Reliability counters
+    v_status_counts = {"SUCCESS": 0, "EXTRACTIVE_FALLBACK": 0, "EMPTY_RETRIEVAL": 0, "API_ERROR": 0}
+    h_status_counts = {"SUCCESS": 0, "EXTRACTIVE_FALLBACK": 0, "EMPTY_RETRIEVAL": 0, "API_ERROR": 0}
 
     for item in EVALUATION_DATASET:
         qid = item["id"]
@@ -472,34 +596,42 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
 
         print(f"Evaluating {qid}: '{q}' [{repo}]...")
 
-        # 1. Vector-Only RAG
+        # 1. Vector-Only RAG (cutoff k=5)
         v_res = run_vector_only_rag(q, repo, groq_api_key, top_k=5)
-        v_recall, v_prec, v_matched = calculate_retrieval_metrics(exp_sources, v_res["retrieved_source_ids"], cutoff_k=5)
-        v_rel_recall, _ = evaluate_relationship_recall(exp_edges, v_res["graph_edges"])
-        v_ground = evaluate_groundedness(v_res["answer"], v_res["retrieved_source_ids"], v_res["graph_edges"], v_res["status"])
+        v_status_counts[v_res["status"]] = v_status_counts.get(v_res["status"], 0) + 1
+        v_recall, v_prec, v_f1, v_matched = calculate_retrieval_metrics(exp_sources, v_res["retrieved_source_ids"], cutoff_k=5)
+        v_rel_recall, _ = evaluate_relationship_recall(exp_edges, v_res["graph_edges"], edge_budget=30)
+        v_ground_res = evaluate_groundedness(v_res["answer"], v_res["retrieved_source_ids"], v_res["graph_edges"], v_res["evidence_texts"], v_res["status"])
+        v_ground = v_ground_res["score"]
 
-        v_recalls.append(v_recall)
-        v_precisions.append(v_prec)
+        v_recalls_at_5.append(v_recall)
+        v_precisions_at_5.append(v_prec)
+        v_f1s_at_5.append(v_f1)
         v_rel_recalls.append(v_rel_recall)
         v_groundedness.append(v_ground)
         v_latencies.append(v_res["latency_sec"])
 
         time.sleep(3.0)
 
-        # 2. Hybrid Graph-RAG
+        # 2. Hybrid Graph-RAG (FAIR COMPARISON: evaluated at cutoff k=5 for document level, plus context-wide recall)
         h_res = run_hybrid_graph_rag(q, repo, groq_api_key, top_k=5)
-        h_recall, h_prec, h_matched = calculate_retrieval_metrics(exp_sources, h_res["retrieved_source_ids"], cutoff_k=None)
-        h_rel_recall, h_matched_edges = evaluate_relationship_recall(exp_edges, h_res["graph_edges"])
-        h_ground = evaluate_groundedness(h_res["answer"], h_res["retrieved_source_ids"], h_res["graph_edges"], h_res["status"])
+        h_status_counts[h_res["status"]] = h_status_counts.get(h_res["status"], 0) + 1
+        h_recall_5, h_prec_5, h_f1_5, h_matched_5 = calculate_retrieval_metrics(exp_sources, h_res["retrieved_source_ids"], cutoff_k=5)
+        h_exp_rec, h_exp_prec, h_exp_f1, h_exp_matched = calculate_retrieval_metrics(exp_sources, h_res["retrieved_source_ids"], cutoff_k=None)
+        h_rel_recall, h_matched_edges = evaluate_relationship_recall(exp_edges, h_res["graph_edges"], edge_budget=30)
+        h_ground_res = evaluate_groundedness(h_res["answer"], h_res["retrieved_source_ids"], h_res["graph_edges"], h_res["evidence_texts"], h_res["status"])
+        h_ground = h_ground_res["score"]
 
-        h_recalls.append(h_recall)
-        h_precisions.append(h_prec)
+        h_recalls_at_5.append(h_recall_5)
+        h_precisions_at_5.append(h_prec_5)
+        h_f1s_at_5.append(h_f1_5)
+        h_expanded_recalls.append(h_exp_rec)
         h_rel_recalls.append(h_rel_recall)
         h_groundedness.append(h_ground)
         h_latencies.append(h_res["latency_sec"])
 
-        print(f"  -> Vector-Only: Recall@5={v_recall}, Prec@5={v_prec}, RelRecall={v_rel_recall}, Grounded={v_ground}, Latency={v_res['latency_sec']}s [{v_res['status']}]")
-        print(f"  -> Hybrid-RAG : Recall={h_recall}, Prec={h_prec}, RelRecall={h_rel_recall}, Grounded={h_ground}, Latency={h_res['latency_sec']}s [{h_res['status']}]")
+        print(f"  -> Vector-Only: Recall@5={v_recall}, Prec@5={v_prec}, F1@5={v_f1}, RelRecall={v_rel_recall}, Grounded={v_ground}, Latency={v_res['latency_sec']}s [{v_res['status']}]")
+        print(f"  -> Hybrid-RAG : Recall@5={h_recall_5}, Prec@5={h_prec_5}, F1@5={h_f1_5}, ExpRecall={h_exp_rec}, RelRecall={h_rel_recall}, Grounded={h_ground}, Latency={h_res['latency_sec']}s [{h_res['status']}]")
 
         results.append({
             "id": qid,
@@ -517,8 +649,10 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
                 "metrics": {
                     "recall_at_5": v_recall,
                     "precision_at_5": v_prec,
+                    "f1_at_5": v_f1,
                     "relationship_recall": v_rel_recall,
-                    "groundedness": v_ground
+                    "groundedness": v_ground,
+                    "groundedness_breakdown": v_ground_res
                 },
                 "answer_snippet": v_res["answer"][:300]
             },
@@ -530,14 +664,18 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
                 "graph_nodes_count": h_res["graph_nodes_count"],
                 "graph_edges_count": h_res["graph_edges_count"],
                 "retrieved_source_ids": h_res["retrieved_source_ids"],
-                "matched_expected_ids": h_matched,
+                "matched_expected_ids_at_5": h_matched_5,
+                "matched_expected_ids_expanded": h_exp_matched,
                 "matched_relationship_edges": h_matched_edges,
                 "actual_graph_edges": h_res["graph_edges"],
                 "metrics": {
-                    "recall": h_recall,
-                    "precision": h_prec,
+                    "recall_at_5": h_recall_5,
+                    "precision_at_5": h_prec_5,
+                    "f1_at_5": h_f1_5,
+                    "expanded_context_recall": h_exp_rec,
                     "relationship_recall": h_rel_recall,
-                    "groundedness": h_ground
+                    "groundedness": h_ground,
+                    "groundedness_breakdown": h_ground_res
                 },
                 "answer_snippet": h_res["answer"][:300]
             }
@@ -552,25 +690,60 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
             "evaluation_date": time.strftime("%Y-%m-%d %H:%M:%S"),
             "groq_model": "qwen/qwen3.8-27b",
             "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-            "document_retrieval_cutoff_k": 5
+            "document_retrieval_cutoff_k": 5,
+            "graph_traversal_limits": {
+                "max_depth": 2,
+                "max_nodes": 25,
+                "max_edges_budget": 30
+            }
+        },
+        "operational_reliability": {
+            "vector_only": {
+                "success_count": v_status_counts["SUCCESS"],
+                "fallback_count": v_status_counts["EXTRACTIVE_FALLBACK"],
+                "empty_retrieval_count": v_status_counts["EMPTY_RETRIEVAL"],
+                "api_error_count": v_status_counts["API_ERROR"],
+                "success_rate": round(v_status_counts["SUCCESS"] / n, 4),
+                "failure_rate": round((v_status_counts["EMPTY_RETRIEVAL"] + v_status_counts["API_ERROR"]) / n, 4)
+            },
+            "hybrid_graph_rag": {
+                "success_count": h_status_counts["SUCCESS"],
+                "fallback_count": h_status_counts["EXTRACTIVE_FALLBACK"],
+                "empty_retrieval_count": h_status_counts["EMPTY_RETRIEVAL"],
+                "api_error_count": h_status_counts["API_ERROR"],
+                "success_rate": round(h_status_counts["SUCCESS"] / n, 4),
+                "failure_rate": round((h_status_counts["EMPTY_RETRIEVAL"] + h_status_counts["API_ERROR"]) / n, 4)
+            }
         },
         "aggregate_metrics": {
-            "mean_recall": {
-                "vector_only_at_5": round(sum(v_recalls) / n, 4),
-                "hybrid_graph_rag": round(sum(h_recalls) / n, 4),
-                "relative_gain_percent": round(((sum(h_recalls) - sum(v_recalls)) / (sum(v_recalls) or 1)) * 100, 2)
+            "retrieval_at_cutoff_k5": {
+                "mean_recall_at_5": {
+                    "vector_only": round(sum(v_recalls_at_5) / n, 4),
+                    "hybrid_graph_rag": round(sum(h_recalls_at_5) / n, 4)
+                },
+                "mean_precision_at_5": {
+                    "vector_only": round(sum(v_precisions_at_5) / n, 4),
+                    "hybrid_graph_rag": round(sum(h_precisions_at_5) / n, 4)
+                },
+                "mean_f1_at_5": {
+                    "vector_only": round(sum(v_f1s_at_5) / n, 4),
+                    "hybrid_graph_rag": round(sum(h_f1s_at_5) / n, 4)
+                }
             },
-            "mean_precision": {
-                "vector_only_at_5": round(sum(v_precisions) / n, 4),
-                "hybrid_graph_rag": round(sum(h_precisions) / n, 4)
+            "graph_relationship_reasoning": {
+                "relationship_recall_budget_30": {
+                    "vector_only": round(sum(v_rel_recalls) / n, 4),
+                    "hybrid_graph_rag": round(sum(h_rel_recalls) / n, 4)
+                }
             },
-            "relationship_recall": {
-                "vector_only": round(sum(v_rel_recalls) / n, 4),
-                "hybrid_graph_rag": round(sum(h_rel_recalls) / n, 4)
+            "expanded_context_retrieval": {
+                "hybrid_expanded_context_recall": round(sum(h_expanded_recalls) / n, 4)
             },
-            "groundedness_score": {
-                "vector_only": round(sum(v_groundedness) / n, 4),
-                "hybrid_graph_rag": round(sum(h_groundedness) / n, 4)
+            "answer_groundedness": {
+                "mean_groundedness_score": {
+                    "vector_only": round(sum(v_groundedness) / n, 4),
+                    "hybrid_graph_rag": round(sum(h_groundedness) / n, 4)
+                }
             },
             "mean_latency_sec": {
                 "vector_only": round(sum(v_latencies) / n, 3),
@@ -586,9 +759,10 @@ def execute_evaluation(groq_api_key: str) -> Dict[str, Any]:
 
     print(f"\n=======================================================")
     print(f"Evaluation Complete! Summary saved to {report_path}")
-    print(f"Mean Recall: Vector@5={summary['aggregate_metrics']['mean_recall']['vector_only_at_5']} | Hybrid={summary['aggregate_metrics']['mean_recall']['hybrid_graph_rag']}")
-    print(f"Relationship Recall: Vector={summary['aggregate_metrics']['relationship_recall']['vector_only']} | Hybrid={summary['aggregate_metrics']['relationship_recall']['hybrid_graph_rag']}")
-    print(f"Groundedness: Vector={summary['aggregate_metrics']['groundedness_score']['vector_only']} | Hybrid={summary['aggregate_metrics']['groundedness_score']['hybrid_graph_rag']}")
+    print(f"Recall@5: Vector={summary['aggregate_metrics']['retrieval_at_cutoff_k5']['mean_recall_at_5']['vector_only']} | Hybrid={summary['aggregate_metrics']['retrieval_at_cutoff_k5']['mean_recall_at_5']['hybrid_graph_rag']}")
+    print(f"Expanded Recall: Hybrid={summary['aggregate_metrics']['expanded_context_retrieval']['hybrid_expanded_context_recall']}")
+    print(f"Relationship Recall (budget=30): Vector={summary['aggregate_metrics']['graph_relationship_reasoning']['relationship_recall_budget_30']['vector_only']} | Hybrid={summary['aggregate_metrics']['graph_relationship_reasoning']['relationship_recall_budget_30']['hybrid_graph_rag']}")
+    print(f"Groundedness: Vector={summary['aggregate_metrics']['answer_groundedness']['mean_groundedness_score']['vector_only']} | Hybrid={summary['aggregate_metrics']['answer_groundedness']['mean_groundedness_score']['hybrid_graph_rag']}")
     print(f"Mean Latency: Vector={summary['aggregate_metrics']['mean_latency_sec']['vector_only']}s | Hybrid={summary['aggregate_metrics']['mean_latency_sec']['hybrid_graph_rag']}s")
     print(f"=======================================================\n")
     return summary

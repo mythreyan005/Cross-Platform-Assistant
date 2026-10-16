@@ -100,7 +100,7 @@ def fetch_github_records(
 
             record = SourceRecord(
                 source_type=SourceType.GITHUB,
-                source_id=sha[:7],
+                source_id=sha,
                 project_id=repo_name,
                 title=f"Commit {sha[:7]}: {summary_title}",
                 content=(

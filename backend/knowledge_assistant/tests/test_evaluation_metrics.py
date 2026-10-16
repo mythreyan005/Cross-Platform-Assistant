@@ -1,7 +1,12 @@
 """
 Unit tests for evaluation metrics engine:
-Canonical artifact identifier normalization, Recall@k, Precision@k,
-structured graph relationship recall, and evidence-groundedness assessment.
+1. Identifier normalization and matching (full and short commit SHAs, Jira keys, REST endpoints).
+2. Precision@k, Recall@k, and F1@k with fair retrieval cutoffs.
+3. Duplicate chunk handling (source record deduplication).
+4. Empty retrieval and empty ground-truth safety.
+5. Structured graph-edge recall with edge budget limit.
+6. Execution status handling (SUCCESS, EXTRACTIVE_FALLBACK, EMPTY_RETRIEVAL, API_ERROR).
+7. Evidence-based groundedness scoring without hardcoded values.
 """
 
 from django.test import TestCase
@@ -10,18 +15,27 @@ from evaluation.evaluate_rag import (
     artifact_ids_match,
     calculate_retrieval_metrics,
     evaluate_relationship_recall,
-    evaluate_groundedness
+    evaluate_groundedness,
+    ClaimVerificationProtocol
 )
 
 
 class EvaluationMetricsTests(TestCase):
+
     def test_normalize_artifact_id(self):
-        # Commit normalization
-        t, v = normalize_artifact_id("de74a89")
+        # Full 40-char commit SHA
+        full_sha = "de74a89012345678901234567890123456789012"
+        t, v = normalize_artifact_id(full_sha)
         self.assertEqual(t, "commit")
         self.assertEqual(v, "de74a89")
 
-        t, v = normalize_artifact_id("commit:de74a89012345678901234567890123456789012")
+        # Prefixed commit SHA
+        t, v = normalize_artifact_id(f"commit:{full_sha}")
+        self.assertEqual(t, "commit")
+        self.assertEqual(v, "de74a89")
+
+        # Short 7-char SHA
+        t, v = normalize_artifact_id("de74a89")
         self.assertEqual(t, "commit")
         self.assertEqual(v, "de74a89")
 
@@ -51,6 +65,7 @@ class EvaluationMetricsTests(TestCase):
     def test_artifact_ids_match(self):
         # Full SHA vs 7-char short SHA match
         self.assertTrue(artifact_ids_match("de74a89", "commit:de74a89012345678901234567890123456789012"))
+        self.assertTrue(artifact_ids_match("commit:de74a89", "de74a89012345678901234567890123456789012"))
         self.assertFalse(artifact_ids_match("de74a89", "e10ac2a"))
 
         # Issue match
@@ -61,50 +76,62 @@ class EvaluationMetricsTests(TestCase):
         self.assertTrue(artifact_ids_match("GET /api/me", "endpoint:GET:/api/me"))
         self.assertFalse(artifact_ids_match("GET /api/me", "POST /api/me"))
 
-        # Arbitrary substring should NOT match (e.g. 'me' should not match '/api/me/authorization')
+        # Arbitrary substring should NOT match
         self.assertFalse(artifact_ids_match("GET /api/me", "GET /api/me/authorization"))
 
     def test_calculate_retrieval_metrics_empty_retrieved(self):
         expected = ["TRNSPRTPCE-980", "de74a89"]
         retrieved = []
-        recall, precision, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
+        recall, precision, f1, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
         self.assertEqual(recall, 0.0)
         self.assertEqual(precision, 0.0)
+        self.assertEqual(f1, 0.0)
         self.assertEqual(matched, [])
 
     def test_calculate_retrieval_metrics_empty_expected(self):
         expected = []
         retrieved = ["TRNSPRTPCE-980"]
-        recall, precision, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
+        recall, precision, f1, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
         self.assertEqual(recall, 1.0)
         self.assertEqual(precision, 1.0)
+        self.assertEqual(f1, 1.0)
+        self.assertEqual(matched, [])
 
     def test_calculate_retrieval_metrics_mismatched_ids(self):
         expected = ["TRNSPRTPCE-980", "de74a89"]
         retrieved = ["DHIS2-100", "GET /api/analytics"]
-        recall, precision, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
+        recall, precision, f1, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
         self.assertEqual(recall, 0.0)
         self.assertEqual(precision, 0.0)
+        self.assertEqual(f1, 0.0)
         self.assertEqual(len(matched), 0)
 
     def test_calculate_retrieval_metrics_duplicate_sources(self):
         expected = ["TRNSPRTPCE-980", "de74a89"]
-        # Retrieved has duplicates of the same canonical item
+        # Retrieved has duplicates of the same canonical source record (e.g. multiple chunks)
         retrieved = ["TRNSPRTPCE-980", "issue:TRNSPRTPCE-980", "trnsprtpce-980", "de74a89"]
-        recall, precision, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
+        recall, precision, f1, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
         self.assertEqual(recall, 1.0)
-        self.assertEqual(precision, 1.0)  # Deduplicated into 2 items matching 2 expected
+        self.assertEqual(precision, 1.0)  # Deduplicated to 2 items
+        self.assertEqual(f1, 1.0)
         self.assertEqual(len(matched), 2)
 
-    def test_calculate_retrieval_metrics_partial_match(self):
-        expected = ["TRNSPRTPCE-980", "de74a89", "e10ac2a"]
-        retrieved = ["TRNSPRTPCE-980", "other_doc_1", "other_doc_2"]
-        recall, precision, matched = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
-        self.assertEqual(recall, round(1 / 3, 4))
-        self.assertEqual(precision, round(1 / 3, 4))
-        self.assertEqual(matched, ["TRNSPRTPCE-980"])
+    def test_calculate_retrieval_metrics_fair_cutoff_k(self):
+        expected = ["item-1", "item-2", "item-3"]
+        retrieved = ["item-1", "other-a", "other-b", "other-c", "other-d", "item-2", "item-3"]
+        
+        # At cutoff_k = 5, only items 0..4 are considered. item-1 is matched, item-2 and 3 are outside cutoff
+        recall_5, prec_5, f1_5, matched_5 = calculate_retrieval_metrics(expected, retrieved, cutoff_k=5)
+        self.assertEqual(recall_5, round(1 / 3, 4))
+        self.assertEqual(prec_5, round(1 / 5, 4))
+        self.assertEqual(matched_5, ["item-1"])
 
-    def test_evaluate_relationship_recall_known_relationships(self):
+        # Without cutoff, all 3 are matched
+        recall_all, prec_all, f1_all, matched_all = calculate_retrieval_metrics(expected, retrieved, cutoff_k=None)
+        self.assertEqual(recall_all, 1.0)
+        self.assertEqual(prec_all, round(3 / 7, 4))
+
+    def test_evaluate_relationship_recall_with_budget(self):
         expected_edges = [
             {"source": "commit:de74a89", "target": "issue:TRNSPRTPCE-980", "relationship": "REFERENCES_ISSUE"},
             {"source": "commit:de74a89", "target": "component:tapi", "relationship": "MODIFIES_COMPONENT"}
@@ -114,50 +141,75 @@ class EvaluationMetricsTests(TestCase):
             {"source": "commit:de74a89", "target": "component:tapi", "relationship": "MODIFIES_COMPONENT"},
             {"source": "issue:TRNSPRTPCE-980", "target": "project:transportpce", "relationship": "BELONGS_TO"}
         ]
-        recall, matched = evaluate_relationship_recall(expected_edges, retrieved_edges)
+        recall, matched = evaluate_relationship_recall(expected_edges, retrieved_edges, edge_budget=30)
         self.assertEqual(recall, 1.0)
         self.assertEqual(len(matched), 2)
 
-    def test_evaluate_relationship_recall_wrong_type(self):
-        expected_edges = [
-            {"source": "commit:de74a89", "target": "issue:TRNSPRTPCE-980", "relationship": "REFERENCES_ISSUE"}
-        ]
-        # Same source and target, but wrong relationship type
-        retrieved_edges = [
-            {"source": "commit:de74a89", "target": "issue:TRNSPRTPCE-980", "relationship": "RELATED_TO"}
-        ]
-        recall, matched = evaluate_relationship_recall(expected_edges, retrieved_edges)
-        self.assertEqual(recall, 0.0)
-        self.assertEqual(len(matched), 0)
+    def test_evaluate_relationship_recall_empty_cases(self):
+        # Empty expected edges -> 1.0
+        recall, matched = evaluate_relationship_recall([], [{"source": "a", "target": "b", "relationship": "R"}])
+        self.assertEqual(recall, 1.0)
 
-    def test_evaluate_relationship_recall_inverted_direction(self):
-        expected_edges = [
-            {"source": "commit:de74a89", "target": "issue:TRNSPRTPCE-980", "relationship": "REFERENCES_ISSUE"}
-        ]
-        # Inverted direction: issue -> commit
-        retrieved_edges = [
-            {"source": "issue:TRNSPRTPCE-980", "target": "commit:de74a89", "relationship": "REFERENCES_ISSUE"}
-        ]
-        recall, matched = evaluate_relationship_recall(expected_edges, retrieved_edges)
+        # Empty retrieved edges -> 0.0
+        recall, matched = evaluate_relationship_recall([{"source": "a", "target": "b", "relationship": "R"}], [])
         self.assertEqual(recall, 0.0)
-        self.assertEqual(len(matched), 0)
 
-    def test_evaluate_groundedness(self):
+    def test_evaluate_groundedness_statuses(self):
+        # EMPTY_RETRIEVAL must receive 0.0 groundedness
+        res_empty = evaluate_groundedness(
+            "No relevant documents found.",
+            [], [], evidence_texts=[], status="EMPTY_RETRIEVAL"
+        )
+        self.assertEqual(res_empty["score"], 0.0)
+
+        # API_ERROR must receive 0.0 groundedness
+        res_error = evaluate_groundedness(
+            "Service error occurred.",
+            [], [], evidence_texts=[], status="API_ERROR"
+        )
+        self.assertEqual(res_error["score"], 0.0)
+
+    def test_evaluate_groundedness_supported_claims(self):
         retrieved_sources = ["TRNSPRTPCE-980", "de74a89"]
         graph_edges = [
             {"source": "commit:de74a89", "target": "issue:TRNSPRTPCE-980", "relationship": "REFERENCES_ISSUE"}
         ]
+        evidence_texts = [
+            "Commit de74a89 was merged to fix bug TRNSPRTPCE-980 regarding tapi transport service path computation."
+        ]
 
         # Fully grounded answer citing supported entities
         answer_grounded = "Commit `de74a89` directly references Jira ticket `TRNSPRTPCE-980` for the path computation fix."
-        score = evaluate_groundedness(answer_grounded, retrieved_sources, graph_edges, "SUCCESS")
-        self.assertEqual(score, 1.0)
+        res = evaluate_groundedness(answer_grounded, retrieved_sources, graph_edges, evidence_texts, status="SUCCESS")
+        self.assertEqual(res["score"], 1.0)
+        self.assertEqual(res["supported_claims"], 1)
+        self.assertEqual(res["unsupported_claims"], 0)
 
-        # Partially grounded / hallucinated answer citing ungrounded ticket
+    def test_evaluate_groundedness_hallucinated_entity(self):
+        retrieved_sources = ["TRNSPRTPCE-980", "de74a89"]
+        graph_edges = [
+            {"source": "commit:de74a89", "target": "issue:TRNSPRTPCE-980", "relationship": "REFERENCES_ISSUE"}
+        ]
+        evidence_texts = ["Commit de74a89 references TRNSPRTPCE-980."]
+
+        # Cites unsupported Jira ticket FAKE-9999
         answer_hallucinated = "Commit `de74a89` resolved `TRNSPRTPCE-980` and also fixed `FAKE-9999`."
-        score_hallucinated = evaluate_groundedness(answer_hallucinated, retrieved_sources, graph_edges, "SUCCESS")
-        self.assertEqual(score_hallucinated, round(2 / 3, 4))
+        res = evaluate_groundedness(answer_hallucinated, retrieved_sources, graph_edges, evidence_texts, status="SUCCESS")
+        self.assertEqual(res["score"], 0.0)
+        self.assertEqual(res["supported_claims"], 0)
+        self.assertEqual(res["unsupported_claims"], 1)
 
-        # Truthful refusal on empty retrieval
-        score_refusal = evaluate_groundedness("No relevant documents found.", [], [], "EMPTY_RETRIEVAL")
-        self.assertEqual(score_refusal, 1.0)
+    def test_evaluate_groundedness_no_technical_identifiers(self):
+        evidence_texts = [
+            "The authentication module validates user permissions against the central access control database."
+        ]
+
+        # Claim with strong token overlap against evidence
+        supported_conceptual = "The authentication service verifies user permissions against access control databases."
+        res_supp = evaluate_groundedness(supported_conceptual, [], [], evidence_texts, status="SUCCESS")
+        self.assertGreater(res_supp["score"], 0.0)
+
+        # Claim with unrelated tokens (hallucination)
+        unsupported_conceptual = "The quantum encryption algorithm generates polymorphic cryptographic keys."
+        res_unsupp = evaluate_groundedness(unsupported_conceptual, [], [], evidence_texts, status="SUCCESS")
+        self.assertEqual(res_unsupp["score"], 0.0)

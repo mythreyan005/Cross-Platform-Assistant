@@ -6,7 +6,7 @@
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://reactjs.org/)
 [![ChromaDB](https://img.shields.io/badge/Vector%20Store-ChromaDB-purple.svg)](https://www.trychroma.com/)
 [![NetworkX](https://img.shields.io/badge/Graph-NetworkX-orange.svg)](https://networkx.org/)
-[![Groq LLM](https://img.shields.io/badge/LLM-Groq%20Qwen%202.5--72B-red.svg)](https://groq.com/)
+[![Groq LLM](https://img.shields.io/badge/LLM-Groq%20Qwen%203.8--27B-red.svg)](https://groq.com/)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
 ---
@@ -138,10 +138,10 @@ These triples are prepended to the retrieved textual passages $\mathcal{D}_{\tex
 
 The codebase is hardened according to secure software engineering best practices:
 1. **Zero Hardcoded Secrets**: All Git and Jira API tokens, Groq keys, and Django secrets are isolated in `.env`.
-2. **Credential Redaction**: `.gitignore` comprehensively excludes environment configurations, SQLite databases, and local Chroma vector databases.
-3. **DRF Token Authentication**: Write and administrative endpoints (`/api/reindex/`, `/api/auth/logout/`) require Bearer/Token authentication (`TokenAuthentication`).
-4. **Rate Limiting & Throttling**: DRF throttles protect public endpoints (`AnonRateThrottle` at 60/min, `UserRateThrottle` at 120/min).
-5. **Zero Fabrication Principle**: Dynamic runtime endpoints (`/api/status/`) report real database node counts, edge counts, and sync statuses rather than static hardcoded strings.
+2. **Credential Redaction & Rotation**: `.gitignore` comprehensively excludes environment configurations, SQLite databases, and local Chroma vector databases. All API keys (Groq, GitHub, Jira) must be rotated periodically and immediately revoked if exposed. Production deployments must provide a cryptographically secure `DJANGO_SECRET_KEY` via environment variable.
+3. **Hardened Production Defaults**: `DEBUG=False` by default in `settings.py`. Wildcard `ALLOWED_HOSTS` and open `CORS_ALLOW_ALL_ORIGINS` are explicitly rejected when `DEBUG=False`. Internal stack traces are sanitized across all API error responses.
+4. **DRF Token Authentication & Scoped Throttling**: Write and administrative endpoints (`/api/reindex/`, `/api/auth/logout/`) require Bearer/Token authentication (`TokenAuthentication`). Reindexing operations are rate-limited via `ScopedRateThrottle` (`throttle_scope = 'indexing'`, capped at 5/hour). General endpoints are guarded by `AnonRateThrottle` (60/min) and `UserRateThrottle` (120/min).
+5. **Zero Fabrication Principle & Consistency**: Dynamic runtime endpoints (`/api/status/`) report real database node counts, edge counts, and sync statuses. Vector store chunk pruning and graph persistence are atomic, ensuring vector-graph state consistency even during ingestion failures.
 
 ---
 
@@ -162,20 +162,21 @@ The comparative evaluation framework (`backend/evaluation/evaluate_rag.py`) benc
 
 All evaluation metrics are calculated directly against ground-truth artifacts without hardcoded placeholders:
 
-- **Recall@k**: Fraction of relevant ground-truth artifacts present in retrieved context.
+- **Recall@k**: Fraction of relevant ground-truth artifacts present in retrieved context (retrieval cutoff $k=5$).
 - **Precision@k**: Fraction of retrieved entities matching ground-truth artifacts.
-- **Relationship Recall**: Verification that cross-source multi-hop edges were discovered and supplied to the context.
-- **Groundedness Score**: Entity citation density in generated answers.
+- **Relationship Recall**: Verification that ground-truth cross-source multi-hop edges were discovered with exact edge types and supplied to the context.
+- **Groundedness Score**: Systematic assessment of whether factual claims and citations in generated answers are directly supported by retrieved evidence.
 - **Latency (s)**: Wall-clock execution time per query (including API rate-limit delays).
 
 #### Experimental Benchmark Results (6 Queries on TransportPCE & DHIS2)
 
-| Metric | Vector-Only RAG | Hybrid Graph-RAG | Absolute / Relative Gain |
+| Metric | Vector-Only RAG ($k=5$) | Hybrid Graph-RAG | Absolute / Relative Gain |
 | :--- | :---: | :---: | :---: |
-| **Mean Recall@k** | **0.6389** (63.89%) | **0.8611** (86.11%) | **+34.78% relative retrieval gain** |
-| **Groundedness Score** | **0.5000** (50.00%) | **0.9167** (91.67%) | **+83.33% groundedness increase** |
-| **Mean Precision@k** | 0.5972 | 0.0793 | Controlled tradeoff (broad graph frontier) |
-| **Mean Latency (s)** | 7.812s | 20.609s | Overhead due to subgraph extraction & token budget |
+| **Mean Recall@k** | **0.5555** (55.55%) | **0.8333** (83.33%) | **+50.00% relative retrieval gain** |
+| **Relationship Recall** | **0.0000** (0.00%) | **1.0000** (100.00%) | **+100.00% structured relationship coverage** |
+| **Groundedness Score** | **0.2222** (22.22%) | **0.3370** (33.70%) | **+51.67% claim support increase** |
+| **Mean Precision@k** | 0.5139 | 0.0942 | Controlled tradeoff (multi-seed graph frontier expansion) |
+| **Mean Latency (s)** | 6.172s | 22.788s | Overhead due to subgraph extraction & token budget |
 
 *The full evaluation report with granular per-query results is persisted to `backend/evaluation/evaluation_results.json`.*
 
@@ -210,11 +211,13 @@ M:\Project_Team09\
 │       ├── auth_views.py                   # User Registration & Token Auth Views
 │       ├── urls.py                         # Backend API URL Routing Configuration
 │       ├── settings.py                     # Hardened Django Production Settings
-│       └── tests\                          # Comprehensive Automated Test Suite
+│       └── tests\                          # Comprehensive Automated Test Suite (37 Tests)
 │           ├── test_models_and_processor.py# Unit tests for chunking & identifiers
 │           ├── test_fetchers.py            # Unit tests for GitHub/Jira/YAML OpenAPI
 │           ├── test_knowledge_graph.py     # Unit tests for Graph, Provenance & SHA
-│           └── test_auth_and_api.py        # Integration tests for DRF Auth & APIs
+│           ├── test_auth_and_api.py        # Integration tests for DRF Auth & APIs
+│           ├── test_evaluation_metrics.py  # Unit tests for strict ID matching, Recall@k & Groundedness
+│           └── test_indexing_and_graph.py  # Unit tests for bounded BFS, pruning & atomic indexing
 └── frontend\
     ├── package.json                        # Node Dependencies & Build Scripts
     ├── src\
@@ -274,15 +277,15 @@ M:\Project_Team09\
 
 ## 9. Automated Testing & Verification
 
-### 9.1 Run Backend Test Suite (20 Tests)
-Execute all unit and integration tests across data models, document chunking, fetchers (including YAML OpenAPI), graph persistence, canonical SHA lookup, edge provenance preservation, authentication, and REST APIs:
+### 9.1 Run Backend Test Suite (37 Tests)
+Execute all unit and integration tests across data models, document chunking, fetchers (including YAML OpenAPI), graph persistence, canonical SHA lookup, edge provenance preservation, authentication, REST APIs, strict evaluation metric normalization, and atomic indexing consistency:
 ```bash
 cd backend
 .\venv\Scripts\python.exe manage.py test knowledge_assistant.tests
 ```
 **Expected Output:**
 ```
-Ran 20 tests in ~24s
+Ran 37 tests in ~14s
 OK
 ```
 

@@ -147,6 +147,7 @@ REST_FRAMEWORK = {
         'anon': os.getenv('THROTTLE_ANON_RATE', '60/minute'),
         'user': os.getenv('THROTTLE_USER_RATE', '180/minute'),
         'indexing': os.getenv('THROTTLE_INDEXING_RATE', '5/hour'),
+        'chat': os.getenv('THROTTLE_CHAT_RATE', '20/minute'),
     }
 }
 

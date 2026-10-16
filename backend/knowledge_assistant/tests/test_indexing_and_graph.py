@@ -1,16 +1,22 @@
 """
 Regression tests for indexing pipeline, Knowledge Graph node collisions,
-edge provenance, incremental re-indexing, record deletion, and bounded traversal.
+edge provenance, incremental re-indexing, record deletion, bounded traversal,
+safe vector updates, full SHA canonicalization, and index freshness checks.
 """
 
 import os
+import json
 import tempfile
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 
 from knowledge_assistant.models_data import SourceRecord, SourceType, NodeType, RelationshipType
 from knowledge_assistant.knowledge_graph import SoftwareKnowledgeGraph
-from knowledge_assistant.rag_pipeline import load_and_index_data
+from knowledge_assistant.rag_pipeline import (
+    load_and_index_data,
+    check_index_freshness,
+    PROJECT_CONFIGS
+)
 
 
 class IndexingAndGraphTests(TestCase):
@@ -40,6 +46,31 @@ class IndexingAndGraphTests(TestCase):
         self.assertEqual(self.kg.find_node("AUTH-1"), issue_id)
         self.assertEqual(self.kg.find_node("POST /auth"), ep_id)
         self.assertEqual(self.kg.find_node("auth"), comp_id)
+
+    def test_full_sha_canonical_lookup_and_short_sha_tolerance(self):
+        """Verifies full commit SHAs are canonical and short SHAs resolve cleanly."""
+        full_sha = "abcdef0123456789abcdef0123456789abcdef01"
+        rec = SourceRecord(
+            source_type=SourceType.GITHUB,
+            source_id=full_sha,
+            project_id="test/repo",
+            title="Commit test",
+            content="Testing full SHA canonical resolution",
+            metadata={"sha": full_sha, "short_sha": full_sha[:7]}
+        )
+        self.kg.add_commit_record(rec)
+
+        expected_node_id = f"commit:{full_sha}"
+        self.assertTrue(self.kg.graph.has_node(expected_node_id))
+
+        # Lookup via full SHA
+        self.assertEqual(self.kg.find_node(full_sha), expected_node_id)
+        # Lookup via short SHA
+        self.assertEqual(self.kg.find_node(full_sha[:7]), expected_node_id)
+        # Lookup via prefixed full SHA
+        self.assertEqual(self.kg.find_node(f"commit:{full_sha}"), expected_node_id)
+        # Lookup via prefixed short SHA
+        self.assertEqual(self.kg.find_node(f"commit:{full_sha[:7]}"), expected_node_id)
 
     def test_exact_edge_types_and_provenance(self):
         """Verifies edge types and provenance metadata on graph edges."""
@@ -120,10 +151,39 @@ class IndexingAndGraphTests(TestCase):
     @patch("knowledge_assistant.rag_pipeline.fetch_github_records")
     @patch("knowledge_assistant.rag_pipeline.fetch_jira_records")
     @patch("knowledge_assistant.rag_pipeline.get_vector_store")
+    def test_safe_indexing_upserts_before_deleting(self, mock_get_vs, mock_jira, mock_gh, mock_oas):
+        """Verifies safe indexing sequence: add_documents occurs before pruning obsolete chunks."""
+        call_order = []
+        mock_vs = MagicMock()
+        mock_vs.get.return_value = {"ids": ["old_chunk_1"]}
+        mock_vs.add_documents.side_effect = lambda **kwargs: call_order.append("add_documents")
+        mock_vs.delete.side_effect = lambda **kwargs: call_order.append("delete")
+        mock_get_vs.return_value = mock_vs
+
+        mock_jira.return_value = []
+        mock_gh.return_value = []
+        mock_oas.return_value = [
+            SourceRecord(
+                source_type=SourceType.OPENAPI,
+                source_id="GET /api/test",
+                project_id="test/repo",
+                title="Test",
+                content="Endpoint",
+                metadata={"method": "GET", "path": "/api/test", "tags": []}
+            )
+        ]
+
+        load_and_index_data(repo="opendaylight/transportpce", max_commits=2, max_issues=2)
+        self.assertEqual(call_order, ["add_documents", "delete"])
+
+    @patch("knowledge_assistant.rag_pipeline.fetch_openapi_records")
+    @patch("knowledge_assistant.rag_pipeline.fetch_github_records")
+    @patch("knowledge_assistant.rag_pipeline.fetch_jira_records")
+    @patch("knowledge_assistant.rag_pipeline.get_vector_store")
     def test_vector_failure_prevents_graph_persistence(self, mock_get_vs, mock_jira, mock_gh, mock_oas):
         """Simulates vector store insertion failure and verifies graph is not updated."""
         mock_vs = MagicMock()
-        mock_vs.get.return_value = {"ids": []}
+        mock_vs.get.return_value = {"ids": ["old_chunk"]}
         mock_vs.add_documents.side_effect = RuntimeError("Chroma connection error")
         mock_get_vs.return_value = mock_vs
         mock_jira.return_value = []
@@ -141,3 +201,37 @@ class IndexingAndGraphTests(TestCase):
 
         with self.assertRaises(RuntimeError):
             load_and_index_data(repo="opendaylight/transportpce", max_commits=2, max_issues=2)
+
+        # Confirm delete was never called since add_documents failed
+        mock_vs.delete.assert_not_called()
+
+    def test_check_index_freshness(self):
+        """Tests index freshness check detects missing files or invalid manifest."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_file = os.path.join(tmp_dir, "test_manifest.json")
+            # Create a valid manifest
+            m_data = {
+                "project": "Test Project",
+                "repo": "test/repo",
+                "index_version": "2.1",
+                "status": "READY"
+            }
+            with open(manifest_file, "w") as f:
+                json.dump(m_data, f)
+
+            with patch.dict(PROJECT_CONFIGS["dhis2/dhis2-core"], {
+                "chroma_dir": tmp_dir,
+                "graph_file": os.path.join(tmp_dir, "graph.json"),
+                "manifest_file": manifest_file
+            }):
+                # Missing graph file
+                freshness = check_index_freshness("dhis2/dhis2-core")
+                self.assertFalse(freshness["is_fresh"])
+                self.assertIn("Knowledge Graph JSON missing", freshness["issues"])
+
+                # Create graph file
+                with open(os.path.join(tmp_dir, "graph.json"), "w") as f:
+                    f.write("{}")
+
+                freshness_now = check_index_freshness("dhis2/dhis2-core")
+                self.assertTrue(freshness_now["is_fresh"])

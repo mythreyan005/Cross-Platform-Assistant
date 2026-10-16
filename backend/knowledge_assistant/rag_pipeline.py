@@ -6,6 +6,8 @@ Knowledge Graph construction, and Hybrid Graph-RAG answer generation.
 
 import os
 import re
+import json
+import time
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
@@ -56,6 +58,7 @@ PROJECT_CONFIGS: Dict[str, Dict[str, Any]] = {
         "chroma_dir": str(BASE_DIR / "chroma_db_dhis2"),
         "graph_file": str(BASE_DIR / "knowledge_graph_dhis2.json"),
         "openapi_source": str(BASE_DIR / "specs" / "dhis2_openapi.json"),
+        "manifest_file": str(BASE_DIR / "index_manifest_dhis2.json"),
     },
     "opendaylight/transportpce": {
         "name": "TransportPCE (OpenDaylight)",
@@ -66,6 +69,7 @@ PROJECT_CONFIGS: Dict[str, Dict[str, Any]] = {
         "chroma_dir": str(BASE_DIR / "chroma_db_transportpce"),
         "graph_file": str(BASE_DIR / "knowledge_graph_transportpce.json"),
         "openapi_source": str(BASE_DIR / "specs" / "transportpce_openapi.json"),
+        "manifest_file": str(BASE_DIR / "index_manifest_transportpce.json"),
     }
 }
 
@@ -175,8 +179,14 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
     new_chunk_ids = [cid for cid, _ in chunked_pairs]
     docs = [d for _, d in chunked_pairs]
 
-    # 5. Synchronize ChromaDB: remove obsolete chunks and insert/update current chunks
+    # 5. Synchronize ChromaDB: safe update strategy
+    # First, stage/upsert all new documents. Only if that succeeds without error,
+    # prune obsolete IDs so a failure never leaves Chroma stripped of prior data.
     try:
+        if docs:
+            vector_store.add_documents(documents=docs, ids=new_chunk_ids)
+            print(f"Successfully indexed {len(docs)} chunks into ChromaDB.")
+
         existing_data = vector_store.get()
         existing_ids = set(existing_data.get("ids", []))
         obsolete_ids = existing_ids - set(new_chunk_ids)
@@ -184,19 +194,31 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
         if obsolete_ids:
             print(f"Pruning {len(obsolete_ids)} obsolete vector chunks from ChromaDB...")
             vector_store.delete(ids=list(obsolete_ids))
-
-        if docs:
-            vector_store.add_documents(documents=docs, ids=new_chunk_ids)
-            print(f"Successfully indexed {len(docs)} chunks into ChromaDB.")
     except Exception as e:
         logger.error(f"Critical error during vector store update: {e}", exc_info=True)
-        # CRITICAL: Do NOT persist new graph if vector store fails, to prevent state inconsistency!
+        # CRITICAL: Do NOT persist new graph or manifest if vector store fails, to prevent state inconsistency!
         raise RuntimeError(f"Vector store indexing failed: {e}") from e
 
-    # 6. Atomic consistency: Only persist Knowledge Graph after vector store successfully updates
+    # 6. Atomic consistency: Only persist Knowledge Graph and Manifest after vector store successfully updates
     new_kg.save_to_file(config["graph_file"])
     stats = new_kg.get_stats()
     print(f"Saved Knowledge Graph with {stats['total_nodes']} nodes and {stats['total_edges']} edges.\n")
+
+    manifest_data = {
+        "project": config["name"],
+        "repo": repo_key,
+        "index_version": "2.1",
+        "indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "READY",
+        "jira_issues": len(jira_records),
+        "github_commits": len(github_records),
+        "openapi_endpoints": len(openapi_records),
+        "vector_chunks": len(chunked_pairs),
+        "graph_stats": stats
+    }
+    manifest_path = config.get("manifest_file") or str(BASE_DIR / f"index_manifest_{config['slug']}.json")
+    with open(manifest_path, "w", encoding="utf-8") as mf:
+        json.dump(manifest_data, mf, indent=2)
 
     return {
         "project": config["name"],
@@ -206,6 +228,43 @@ def load_and_index_data(repo: str = "dhis2/dhis2-core", max_commits: int = 25, m
         "openapi_endpoints": len(openapi_records),
         "vector_chunks": len(chunked_pairs),
         "graph_stats": stats
+    }
+
+
+def check_index_freshness(repo_key: str, max_age_seconds: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Validates whether the index files (ChromaDB, Knowledge Graph, Manifest)
+    are present, consistent, and within freshness bounds.
+    """
+    config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
+    chroma_dir = config["chroma_dir"]
+    graph_file = config["graph_file"]
+    manifest_file = config.get("manifest_file") or str(BASE_DIR / f"index_manifest_{config['slug']}.json")
+
+    issues = []
+    if not os.path.exists(chroma_dir):
+        issues.append("ChromaDB directory missing")
+    if not os.path.exists(graph_file):
+        issues.append("Knowledge Graph JSON missing")
+    if not os.path.exists(manifest_file):
+        issues.append("Index manifest missing")
+    else:
+        try:
+            with open(manifest_file, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            if manifest.get("status") != "READY":
+                issues.append(f"Index status is '{manifest.get('status')}' (not READY)")
+            if manifest.get("index_version") != "2.1":
+                issues.append(f"Index version '{manifest.get('index_version')}' is incompatible with required '2.1'")
+        except Exception as e:
+            issues.append(f"Manifest unreadable: {e}")
+
+    is_fresh = len(issues) == 0
+    return {
+        "repo": repo_key,
+        "is_fresh": is_fresh,
+        "issues": issues,
+        "manifest_path": manifest_file
     }
 
 
@@ -227,12 +286,10 @@ def ask_ai_hybrid(
     repo_key = normalize_repo(repo, question)
     config = PROJECT_CONFIGS.get(repo_key, PROJECT_CONFIGS["dhis2/dhis2-core"])
 
-    # Ensure vector store and knowledge graph are populated
-    chroma_dir = config["chroma_dir"]
-    graph_file = config["graph_file"]
-
-    if not os.path.exists(chroma_dir) or not os.path.exists(graph_file):
-        print(f"Data store missing for {config['name']}. Triggering initial indexing...")
+    # Ensure vector store and knowledge graph are populated and fresh
+    freshness = check_index_freshness(repo_key)
+    if not freshness["is_fresh"]:
+        print(f"Data store missing or stale for {config['name']} ({', '.join(freshness['issues'])}). Triggering reindexing...")
         load_and_index_data(repo_key)
 
     vector_store = get_vector_store(repo_key)
@@ -298,11 +355,24 @@ def get_project_sync_status(repo: str = "dhis2/dhis2-core") -> Dict[str, Any]:
             pass
 
     is_synced = vector_count > 0 and graph_stats["total_nodes"] > 0
+    manifest_file = config.get("manifest_file") or str(BASE_DIR / f"index_manifest_{config['slug']}.json")
+    last_indexed_at = None
+    index_version = None
+    if os.path.exists(manifest_file):
+        try:
+            with open(manifest_file, "r", encoding="utf-8") as mf:
+                mdata = json.load(mf)
+                last_indexed_at = mdata.get("indexed_at")
+                index_version = mdata.get("index_version")
+        except Exception:
+            pass
 
     return {
         "repo": repo_key,
         "name": config["name"],
         "is_synced": is_synced,
+        "index_version": index_version,
+        "last_indexed_at": last_indexed_at,
         "vector_chunks_count": vector_count,
         "graph_nodes_count": graph_stats["total_nodes"],
         "graph_edges_count": graph_stats["total_edges"],

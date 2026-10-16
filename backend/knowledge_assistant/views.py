@@ -26,7 +26,8 @@ class ChatAPIView(APIView):
     Accepts question and repository, retrieves hybrid evidence, and returns structured answer.
     """
     permission_classes = [AllowAny]
-    throttle_classes = [AnonRateThrottle, UserRateThrottle]
+    throttle_classes = [AnonRateThrottle, UserRateThrottle, ScopedRateThrottle]
+    throttle_scope = 'chat'
 
     def post(self, request):
         try:

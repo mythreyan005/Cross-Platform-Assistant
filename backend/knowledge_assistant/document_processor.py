@@ -89,7 +89,7 @@ class DocumentProcessor:
             }
 
             # Copy relevant extra metadata without nesting
-            for k in ("jira_keys", "components", "method", "path"):
+            for k in ("jira_keys", "components", "method", "path", "sha", "short_sha"):
                 if k in record.metadata:
                     val = record.metadata[k]
                     if isinstance(val, list):
