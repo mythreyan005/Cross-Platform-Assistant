@@ -1,0 +1,56 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+
+# Environment and Secret files
+.env
+.env.*
+!.env.example
+
+# SQLite Database
+*.sqlite3
+db.sqlite3
+
+# Vector Store / ChromaDB storage
+chroma_db/
+chroma_db_*/
+
+# Django static & media uploads
+media/
+staticfiles/
+
+# Logs
+*.log
+
+# Pytest / Coverage / Testing
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
